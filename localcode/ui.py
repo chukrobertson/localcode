@@ -982,7 +982,7 @@ class MainWindow(Adw.ApplicationWindow):
             developer_name="LocalCode contributors",
             version="0.1.0",
             comments="Local-first Ollama coding for GNOME",
-            website="https://github.com/MemPalace/mempalace",
+            website="https://github.com/chukrobertson/localcode",
             license_type=Gtk.License.MIT_X11,
         )
         about.add_credit_section("Local memory", ["MemPalace contributors"])
