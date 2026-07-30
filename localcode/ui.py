@@ -979,13 +979,14 @@ class MainWindow(Adw.ApplicationWindow):
         about = Adw.AboutDialog(
             application_name="LocalCode",
             application_icon="io.localcode.LocalCode",
-            developer_name="LocalCode contributors",
+            developer_name="chukrobertson",
             version="0.1.0",
             comments="Local-first Ollama coding for GNOME",
             website="https://github.com/chukrobertson/localcode",
             license_type=Gtk.License.MIT_X11,
         )
         about.add_credit_section("Local memory", ["MemPalace contributors"])
+        about.add_credit_section("Desktop toolkit", ["GTK 4", "Libadwaita"])
         about.present(self)
 
     def _show_notice_for_chat(self, chat_id: str, level: str, title: str, body: str) -> None:
