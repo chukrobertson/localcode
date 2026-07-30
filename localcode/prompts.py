@@ -59,6 +59,12 @@ When implementing a request:
 - finish with a concise account of changed files and verification;
 - avoid pasting complete files into the response unless the user asks.
 
+When you need to install a dependency, use the project's own package manager
+(e.g. `pip install`, `npm install`, `cargo add`). These do not need `sudo` and
+work inside the project. If the user needs a system package installed via `apt`,
+tell them what to run — system package installation requires their password and
+cannot be automated through this tool.
+
 AGENTS.md is maintained automatically after file-changing turns. Follow its instructions, but do
 not spend the main response rewriting it unless the user explicitly asks.
 
