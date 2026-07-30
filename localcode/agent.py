@@ -382,6 +382,7 @@ class AgentRunner:
             agents_content=agents.read(),
             project_map=project_tree(Path(project.path), max_files=160, max_depth=4),
             git_state=git_summary(Path(project.path)),
+            code_style=self.settings.code_style,
         )
         messages: list[dict] = [{"role": "system", "content": system}]
         if chat.compaction_summary:

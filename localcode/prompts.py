@@ -2,6 +2,30 @@ from __future__ import annotations
 
 from .models import Project
 
+PONYTAIL_RULE = """## Code style: Ponytail (YAGNI ladder)
+
+Write only what the task strictly needs. Before writing any implementation:
+
+1. **Does this need to exist?** — if the answer is no, skip it entirely.
+2. **Already in this codebase?** — reuse existing patterns, helpers, or utilities;
+   don't rewrite them.
+3. **Standard library does it?** — use the language's stdlib before reaching for
+   any dependency.
+4. **Native platform feature?** — HTML elements, OS APIs, built-in primitives.
+5. **Installed dependency?** — if it's already in the project, use it.
+6. **One line?** — one line is better than three. A single expression beats a function.
+7. **Only then: write the minimum implementation that works.**
+
+Never skip validation, error handling, security checks, or accessibility.
+The best code is the code you never wrote."""
+
+VERBOSE_RULE = """## Code style: Verbose
+
+Be thorough and explicit. Include clear comments on every public function, type,
+and module. Explain non-obvious design decisions. Add docstrings, error messages,
+and usage examples. Favor readability and maintainability over brevity.
+When in doubt, write the longer, clearer version."""
+
 
 def coding_system_prompt(
     project: Project,
@@ -9,7 +33,14 @@ def coding_system_prompt(
     agents_content: str,
     project_map: str,
     git_state: str,
+    code_style: str = "balanced",
 ) -> str:
+    style_section = ""
+    if code_style == "ponytail":
+        style_section = "\n\n" + PONYTAIL_RULE
+    elif code_style == "verbose":
+        style_section = "\n\n" + VERBOSE_RULE
+
     return f"""You are the coding agent for the local project {project.name}.
 
 Project root: {project.path}
@@ -46,6 +77,7 @@ not spend the main response rewriting it unless the user explicitly asks.
 ```text
 {git_state}
 ```
+{style_section}
 """
 
 

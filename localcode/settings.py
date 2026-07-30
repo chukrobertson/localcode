@@ -12,6 +12,7 @@ DEFAULTS = {
     "output_reserve": "4096",
     "max_tool_rounds": "12",
     "mempalace_enabled": "true",
+    "code_style": "balanced",
 }
 
 
@@ -52,6 +53,11 @@ class AppSettings:
     @property
     def mempalace_enabled(self) -> bool:
         return self.get("mempalace_enabled").casefold() in {"1", "true", "yes", "on"}
+
+    @property
+    def code_style(self) -> str:
+        value = self.get("code_style")
+        return value if value in {"ponytail", "balanced", "verbose"} else "balanced"
 
     def _int(self, key: str, fallback: int) -> int:
         try:

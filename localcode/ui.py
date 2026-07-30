@@ -876,6 +876,36 @@ class MainWindow(Adw.ApplicationWindow):
         )
         ollama_group.add(compact_row)
 
+        style_store = Gtk.StringList.new(
+            ["Ponytail — minimal, YAGNI", "Balanced (default)", "Verbose — thorough, documented"]
+        )
+        style_row = Adw.ComboRow(
+            title="Code style",
+            subtitle=(
+                "Ponytail: writes only what is necessary using a YAGNI decision ladder. "
+                "Balanced: normal coding behaviour. "
+                "Verbose: thorough with comments, docstrings, and explanations."
+            ),
+            model=style_store,
+        )
+        style_map = {
+            "Ponytail — minimal, YAGNI": "ponytail",
+            "Balanced (default)": "balanced",
+            "Verbose — thorough, documented": "verbose",
+        }
+        current_style = self.settings.code_style
+        style_row.set_selected(list(style_map.values()).index(current_style))
+        style_row.connect(
+            "notify::selected",
+            lambda row, _param: self.settings.set(
+                "code_style",
+                style_map.get(
+                    style_store.get_item(row.get_selected()).get_string(), "balanced"
+                ),
+            ),
+        )
+        ollama_group.add(style_row)
+
         providers_group = Adw.PreferencesGroup(
             title="API Providers",
             description=(
