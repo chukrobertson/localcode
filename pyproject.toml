@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "localcode"
+version = "0.1.0"
+description = "A local-first Ollama coding workspace for GNOME"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "LocalCode contributors" }]
+dependencies = []
+
+[project.scripts]
+localcode = "localcode.main:main"
+
+[tool.setuptools.packages.find]
+include = ["localcode*"]
+
+[tool.setuptools.package-data]
+localcode = ["*.css"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"localcode/main.py" = ["E402"]
+"localcode/ui.py" = ["E402"]
+"localcode/widgets.py" = ["E402"]

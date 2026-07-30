@@ -1,0 +1,184 @@
+window {
+  font-feature-settings: "kern" 1;
+}
+
+.sidebar-panel {
+  background: alpha(@headerbar_bg_color, 0.74);
+}
+
+.sidebar-footer {
+  border-top: 1px solid alpha(@borders, 0.55);
+}
+
+.section-kicker,
+.composer-label,
+.message-role {
+  font-family: monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  color: alpha(@window_fg_color, 0.6);
+}
+
+.chat-row {
+  border-radius: 9px;
+  margin: 2px 7px;
+}
+
+.chat-row:selected {
+  background: alpha(@accent_bg_color, 0.18);
+}
+
+.chat-title {
+  font-weight: 600;
+}
+
+.chat-context-indicator {
+  border-radius: 99px;
+  background: alpha(@window_fg_color, 0.16);
+}
+
+.chat-context-indicator.context-warning {
+  background: #e5a50a;
+}
+
+.chat-context-indicator.context-critical,
+.chat-context-indicator.context-exhausted {
+  background: #e01b24;
+}
+
+.context-meter {
+  min-width: 168px;
+  padding: 5px 9px;
+  border-radius: 9px;
+  background: alpha(@window_fg_color, 0.055);
+}
+
+.context-meter progressbar trough {
+  min-height: 5px;
+  border-radius: 99px;
+  background: alpha(@window_fg_color, 0.12);
+}
+
+.context-meter progressbar progress {
+  min-height: 5px;
+  border-radius: 99px;
+  background: @accent_bg_color;
+}
+
+.context-meter.context-warning progressbar progress {
+  background: #e5a50a;
+}
+
+.context-meter.context-critical progressbar progress,
+.context-meter.context-exhausted progressbar progress {
+  background: #e01b24;
+}
+
+.context-banner {
+  padding: 10px 13px;
+  border-radius: 11px;
+  border: 1px solid alpha(@accent_bg_color, 0.35);
+  background: alpha(@accent_bg_color, 0.1);
+}
+
+.context-banner.notice-warning {
+  border-color: alpha(#e5a50a, 0.5);
+  background: alpha(#e5a50a, 0.1);
+}
+
+.context-banner.notice-error {
+  border-color: alpha(#e01b24, 0.5);
+  background: alpha(#e01b24, 0.1);
+}
+
+.message-bubble {
+  padding: 13px 15px 14px;
+  border-radius: 13px;
+  border: 1px solid alpha(@borders, 0.68);
+  background: alpha(@card_bg_color, 0.74);
+  box-shadow: 0 1px 2px alpha(black, 0.08);
+}
+
+.message-user {
+  border-left: 3px solid @accent_bg_color;
+  background: alpha(@accent_bg_color, 0.1);
+}
+
+.message-assistant {
+  border-left: 3px solid #57e389;
+}
+
+.message-event {
+  padding: 9px 12px;
+  border-style: dashed;
+  background: alpha(@window_fg_color, 0.035);
+}
+
+.message-text,
+.message-text text,
+.composer-text,
+.composer-text text {
+  background: transparent;
+}
+
+.message-text {
+  font-size: 1rem;
+}
+
+.activity-row {
+  margin: -3px 14px;
+  padding: 8px 11px;
+  border-left: 1px solid alpha(@window_fg_color, 0.22);
+}
+
+.activity-title {
+  font-family: monospace;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.activity-error {
+  color: #e01b24;
+}
+
+.composer-shell {
+  padding: 13px 15px 12px;
+  border-radius: 15px;
+  border: 1px solid alpha(@borders, 0.9);
+  background: @card_bg_color;
+  box-shadow: 0 4px 16px alpha(black, 0.1);
+}
+
+.permission-mode {
+  font-size: 0.9rem;
+}
+
+.welcome-panel {
+  padding: 44px;
+  border-radius: 24px;
+  border: 1px solid alpha(@borders, 0.5);
+  background: linear-gradient(145deg, alpha(@card_bg_color, 0.88), alpha(@accent_bg_color, 0.055));
+}
+
+.welcome-mark {
+  font-family: monospace;
+  font-weight: 800;
+  font-size: 2.4rem;
+  color: #57e389;
+}
+
+.welcome-title {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.welcome-copy {
+  font-size: 1.05rem;
+}
+
+.numeric {
+  font-family: monospace;
+  font-variant-numeric: tabular-nums;
+}
