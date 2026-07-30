@@ -17,8 +17,9 @@ from .context import make_report
 from .database import Database, utc_now
 from .memory import MemPalaceManager
 from .models import Chat, ContextReport, Project
-from .ollama import ModelInfo, OllamaClient
+from .ollama import OllamaClient
 from .paths import APP_NAME, PACKAGE_ROOT, transcript_dir
+from .providers import ProviderModelInfo, discover_all_models
 from .settings import AppSettings
 from .widgets import (
     ActivityRow,
@@ -46,7 +47,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.projects: list[Project] = []
         self.chats: list[Chat] = []
-        self.models: list[ModelInfo] = []
+        self.models: list[ProviderModelInfo] = []
         self.current_project: Project | None = None
         self.current_chat: Chat | None = None
         self.worker: threading.Thread | None = None
@@ -439,13 +440,15 @@ class MainWindow(Adw.ApplicationWindow):
         self._scroll_to_bottom()
 
     def _refresh_models_async(self) -> None:
-        self.phase_label.set_label("Connecting to Ollama...")
+        self.phase_label.set_label("Discovering models...")
 
         def worker() -> None:
             try:
-                models = OllamaClient(self.settings.ollama_url).list_models()
+                ollama = OllamaClient(self.settings.ollama_url)
+                providers = self.database.list_providers()
+                models = discover_all_models(ollama, self.settings, providers)
                 self._idle(self._models_loaded, models, "")
-            except Exception as error:  # transport errors are rendered in the shell
+            except Exception as error:
                 self._idle(self._models_loaded, [], str(error))
             status = self.memory.status()
             self._idle(
@@ -454,9 +457,9 @@ class MainWindow(Adw.ApplicationWindow):
 
         threading.Thread(target=worker, name="service-discovery", daemon=True).start()
 
-    def _models_loaded(self, models: list[ModelInfo], error: str) -> None:
+    def _models_loaded(self, models: list[ProviderModelInfo], error: str) -> None:
         self.models = models
-        self.phase_label.set_label("Ready" if models else "Ollama unavailable")
+        self.phase_label.set_label("Ready" if models else "No models available")
         self._set_model_dropdown()
         if error:
             self._toast(error, 6)
@@ -480,7 +483,7 @@ class MainWindow(Adw.ApplicationWindow):
         if not desired and self.current_project:
             desired = self.current_project.model
         desired = desired or self.settings.default_model
-        names = [model.name for model in self.models]
+        names = [model.display_name() for model in self.models]
         if desired and desired not in names:
             names.append(desired)
         if not names:
@@ -789,6 +792,50 @@ class MainWindow(Adw.ApplicationWindow):
 
         dialog.choose(self, None, chosen)
 
+    def _show_add_provider_dialog(self, _button: Gtk.Button) -> None:
+        dialog = Adw.PreferencesDialog(title="Add API Provider", search_enabled=False)
+        page = Adw.PreferencesPage(title="Provider", icon_name="network-server-symbolic")
+        dialog.add(page)
+        group = Adw.PreferencesGroup(
+            title="Connection",
+            description="Any OpenAI-compatible endpoint works, including LM Studio, "
+            "vLLM, llama.cpp server, and cloud APIs.",
+        )
+        page.add(group)
+
+        name_row = Adw.EntryRow(title="Display name")
+        endpoint_row = Adw.EntryRow(title="Endpoint URL")
+        endpoint_row.set_text("https://api.openai.com/v1")
+        key_row = Adw.EntryRow(title="API Key")
+        key_row.set_input_purpose(Gtk.InputPurpose.PASSWORD)
+        context_row = Adw.SpinRow.new_with_range(2048, 262144, 1024)
+        context_row.set_title("Context window")
+        context_row.set_value(32768)
+
+        group.add(name_row)
+        group.add(endpoint_row)
+        group.add(key_row)
+        group.add(context_row)
+
+        def provider_chosen(current: Adw.PreferencesDialog, result: Gio.AsyncResult) -> None:
+            dialog.close()
+            name = name_row.get_text().strip()
+            endpoint = endpoint_row.get_text().strip()
+            key = key_row.get_text().strip()
+            if not name or not endpoint:
+                self._toast("Provider name and endpoint are required.")
+                return
+            self.database.add_provider(
+                name,
+                endpoint=endpoint,
+                api_key=key,
+                context_window=int(context_row.get_value()),
+            )
+            self._refresh_models_async()
+
+        dialog.connect("closed", lambda _dialog: provider_chosen)
+        dialog.present(self)
+
     def _show_preferences(self) -> None:
         dialog = Adw.PreferencesDialog(title="LocalCode Preferences", search_enabled=False)
         general = Adw.PreferencesPage(title="General", icon_name="preferences-system-symbolic")
@@ -828,6 +875,50 @@ class MainWindow(Adw.ApplicationWindow):
             lambda row, _param: self.settings.set("compact_threshold", row.get_value() / 100),
         )
         ollama_group.add(compact_row)
+
+        providers_group = Adw.PreferencesGroup(
+            title="API Providers",
+            description=(
+                "OpenAI-compatible endpoints for remote or LAN models. "
+                "Add an endpoint, API key, and model name."
+            ),
+        )
+        general.add(providers_group)
+
+        for provider in self.database.list_providers():
+            row = Adw.ActionRow(
+                title=provider.name,
+                subtitle=f"{provider.endpoint}  ·  {provider.default_context_window:,} tokens",
+            )
+            row.set_icon_name("network-server-symbolic")
+            remove = Gtk.Button.new_from_icon_name("user-trash-symbolic")
+            remove.add_css_class("flat")
+            remove.add_css_class("circular")
+            remove.set_valign(Gtk.Align.CENTER)
+
+            def make_remove(p_id: str) -> None:
+                def remove_provider(_button: Gtk.Button) -> None:
+                    self.database.remove_provider(p_id)
+                    dialog.close()
+                    self._refresh_models_async()
+
+                return remove_provider
+
+            remove.connect("clicked", make_remove(provider.id))
+            row.add_suffix(remove)
+            providers_group.add(row)
+
+        add_provider_row = Adw.ActionRow(
+            title="Add a provider",
+            subtitle="OpenAI-compatible endpoint (e.g. http://192.168.1.50:1234/v1)",
+        )
+        add_provider_row.set_icon_name("list-add-symbolic")
+        add_button = Gtk.Button(label="Add")
+        add_button.add_css_class("suggested-action")
+        add_button.set_valign(Gtk.Align.CENTER)
+        add_button.connect("clicked", self._show_add_provider_dialog)
+        add_provider_row.add_suffix(add_button)
+        providers_group.add(add_provider_row)
 
         if self.current_project:
             project_group = Adw.PreferencesGroup(

@@ -55,6 +55,16 @@ class Activity:
 
 
 @dataclass(slots=True)
+class Provider:
+    id: str
+    name: str
+    endpoint: str = ""
+    api_key: str = ""
+    is_local: bool = False
+    default_context_window: int = 32768
+
+
+@dataclass(slots=True)
 class ContextReport:
     used: int
     limit: int

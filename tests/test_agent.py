@@ -9,58 +9,58 @@ from unittest.mock import patch
 from localcode.agent import AgentCallbacks, AgentRunner
 from localcode.database import Database
 from localcode.models import ContextReport
-from localcode.ollama import ChatResult, ModelInfo, ToolCall
+from localcode.providers import ProviderChatResult, ProviderToolCall
 from localcode.settings import AppSettings
 
 
-class FakeOllamaClient:
-    calls = 0
+def fake_run_chat_factory():
+    calls = {"count": 0}
 
-    def __init__(self, _endpoint: str) -> None:
-        pass
-
-    def list_models(self) -> list[ModelInfo]:
-        return [ModelInfo("fake-code", context_length=32768, capabilities=["completion", "tools"])]
-
-    def show_model(self, model: str) -> ModelInfo:
-        return ModelInfo(model, context_length=32768, capabilities=["completion", "tools"])
-
-    def chat(self, *, messages, on_chunk=None, **_kwargs) -> ChatResult:
-        self.__class__.calls += 1
+    def run_chat(model, settings, *, messages, context_window, output_tokens,
+                 tools=None, on_chunk=None, cancel=None, **_kwargs):
+        calls["count"] += 1
         if any(message.get("role") == "tool" for message in messages):
             content = "Created `hello.txt` and verified the requested content."
             if on_chunk:
                 on_chunk(content)
-            return ChatResult(
+            return ProviderChatResult(
                 content,
                 prompt_tokens=700,
                 eval_tokens=20,
                 done_reason="stop",
-                effective_context=32768,
+                effective_context=context_window or 32768,
             )
-        return ChatResult(
+        return ProviderChatResult(
             "",
             tool_calls=[
-                ToolCall(
-                    "call_1",
-                    "write_file",
-                    {"path": "hello.txt", "content": "hello from local model\n"},
+                ProviderToolCall(
+                    id="call_1",
+                    name="write_file",
+                    arguments={"path": "hello.txt", "content": "hello from local model\n"},
                 )
             ],
             prompt_tokens=500,
             eval_tokens=10,
             done_reason="stop",
-            effective_context=32768,
+            effective_context=context_window or 32768,
         )
 
-    def complete(self, **_kwargs) -> ChatResult:
-        return ChatResult(
-            "## Architecture\n\n- `hello.txt` is the generated project artifact.\n",
-            prompt_tokens=400,
-            eval_tokens=30,
-            done_reason="stop",
-            effective_context=32768,
-        )
+    return run_chat, calls
+
+
+def fake_run_complete(model, settings, *, system, prompt, context_window,
+                      output_tokens=2048, cancel=None, **_kwargs):
+    return ProviderChatResult(
+        "## Architecture\n\n- `hello.txt` is the generated project artifact.\n",
+        prompt_tokens=400,
+        eval_tokens=30,
+        done_reason="stop",
+        effective_context=context_window or 32768,
+    )
+
+
+def fake_show_model_info(model, settings):
+    return 32768, True
 
 
 class FakeMemory:
@@ -95,10 +95,16 @@ class AgentRunnerTests(unittest.TestCase):
         chunks: list[str] = []
         reports: list[ContextReport] = []
         errors: list[str] = []
-        callbacks = AgentCallbacks(chunk=chunks.append, context=reports.append, error=errors.append)
+        callbacks = AgentCallbacks(
+            chunk=chunks.append, context=reports.append, error=errors.append
+        )
         runner = AgentRunner(self.database, AppSettings(self.database), FakeMemory())
 
-        with patch("localcode.agent.OllamaClient", FakeOllamaClient):
+        with (
+            patch("localcode.agent.run_chat", fake_run_chat_factory()[0]),
+            patch("localcode.agent.run_complete", fake_run_complete),
+            patch("localcode.agent.show_model_info", fake_show_model_info),
+        ):
             runner.run_turn(self.chat.id, "Create hello.txt", callbacks)
 
         self.assertEqual(errors, [])
@@ -112,7 +118,9 @@ class AgentRunnerTests(unittest.TestCase):
         self.assertEqual([message.role for message in messages], ["user", "assistant"])
         self.assertIn("Created", messages[-1].content)
         self.assertTrue(reports)
-        transcript = self.root / "data" / "transcripts" / self.project.id / f"{self.chat.id}.jsonl"
+        transcript = (
+            self.root / "data" / "transcripts" / self.project.id / f"{self.chat.id}.jsonl"
+        )
         self.assertTrue(transcript.is_file())
 
     def test_agent_auto_compacts_without_deleting_messages(self) -> None:
@@ -124,7 +132,11 @@ class AgentRunnerTests(unittest.TestCase):
         notices: list[tuple[str, str, str]] = []
         runner = AgentRunner(self.database, AppSettings(self.database), FakeMemory())
 
-        with patch("localcode.agent.OllamaClient", FakeOllamaClient):
+        with (
+            patch("localcode.agent.run_chat", fake_run_chat_factory()[0]),
+            patch("localcode.agent.run_complete", fake_run_complete),
+            patch("localcode.agent.show_model_info", fake_show_model_info),
+        ):
             runner.run_turn(
                 self.chat.id,
                 "Create hello.txt",
@@ -137,7 +149,9 @@ class AgentRunnerTests(unittest.TestCase):
         self.assertIsNotNone(compacted)
         self.assertGreater(compacted.compacted_through, 0)
         self.assertGreater(len(self.database.list_messages(self.chat.id)), before)
-        self.assertTrue(any("compacted" in title.casefold() for _level, title, _body in notices))
+        self.assertTrue(
+            any("compacted" in title.casefold() for _level, title, _body in notices)
+        )
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from .models import Activity, Chat, Message, Project
+from .models import Activity, Chat, Message, Project, Provider
 from .paths import database_path, ensure_app_dirs
 
 SCHEMA_VERSION = 1
@@ -103,6 +103,15 @@ class Database:
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS providers (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    endpoint TEXT NOT NULL DEFAULT '',
+                    api_key TEXT NOT NULL DEFAULT '',
+                    is_local INTEGER NOT NULL DEFAULT 0,
+                    default_context_window INTEGER NOT NULL DEFAULT 32768
                 );
                 """
             )
@@ -359,6 +368,55 @@ class Database:
                 (key, serialized),
             )
 
+    def add_provider(
+        self,
+        name: str,
+        *,
+        endpoint: str = "",
+        api_key: str = "",
+        is_local: bool = False,
+        context_window: int = 32768,
+    ) -> Provider:
+        provider_id = str(uuid.uuid4())
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO providers
+                    (id, name, endpoint, api_key, is_local, default_context_window)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    provider_id,
+                    name.strip(),
+                    endpoint.rstrip("/"),
+                    api_key,
+                    int(is_local),
+                    max(2048, int(context_window)),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM providers WHERE id = ?", (provider_id,)
+            ).fetchone()
+        return self._provider_from_row(row)
+
+    def list_providers(self) -> list[Provider]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM providers ORDER BY is_local DESC, name COLLATE NOCASE"
+            ).fetchall()
+        return [self._provider_from_row(row) for row in rows]
+
+    def get_provider(self, provider_id: str) -> Provider | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM providers WHERE id = ?", (provider_id,)
+            ).fetchone()
+        return self._provider_from_row(row) if row else None
+
+    def remove_provider(self, provider_id: str) -> None:
+        with self.connect() as connection:
+            connection.execute("DELETE FROM providers WHERE id = ?", (provider_id,))
+
     @staticmethod
     def _project_from_row(row: sqlite3.Row) -> Project:
         return Project(
@@ -415,4 +473,15 @@ class Database:
             detail=row["detail"],
             status=row["status"],
             created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _provider_from_row(row: sqlite3.Row) -> Provider:
+        return Provider(
+            id=row["id"],
+            name=row["name"],
+            endpoint=row["endpoint"],
+            api_key=row["api_key"],
+            is_local=bool(row["is_local"]),
+            default_context_window=row["default_context_window"],
         )

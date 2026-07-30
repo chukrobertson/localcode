@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from .agents_file import AgentsFileManager
+from .backend import BackendError, ProviderChatResult, run_chat, run_complete, show_model_info
 from .context import (
     estimate_request_tokens,
     estimate_text_tokens,
@@ -16,7 +17,6 @@ from .context import (
 from .database import Database
 from .memory import MemPalaceManager
 from .models import Chat, ContextReport, Message, Project
-from .ollama import ChatResult, OllamaClient, OllamaError
 from .projects import ProjectTools, git_summary, project_tree
 from .prompts import AGENTS_UPDATE_SYSTEM_PROMPT, COMPACTION_SYSTEM_PROMPT, coding_system_prompt
 from .settings import AppSettings
@@ -71,14 +71,13 @@ class AgentRunner:
             self.database.add_message(chat.id, "user", user_content)
             model = self._resolve_model(chat, project)
             if not model:
-                raise RuntimeError("No Ollama completion model is installed or selected.")
+                raise RuntimeError("No completion model is installed or selected.")
             callbacks.phase("Preparing project context")
 
-            client = OllamaClient(self.settings.ollama_url)
-            model_info = client.show_model(model)
+            model_context_length, _ = show_model_info(model, self.settings)
             configured_context = max(2048, project.context_window)
-            if model_info.context_length:
-                configured_context = min(configured_context, model_info.context_length)
+            if model_context_length:
+                configured_context = min(configured_context, model_context_length)
             output_reserve = min(self.settings.output_reserve, max(512, configured_context // 4))
 
             agents = AgentsFileManager(project.path)
@@ -135,7 +134,6 @@ class AgentRunner:
             )
             callbacks.phase(f"Running {model}")
             final_content, final_result = self._tool_loop(
-                client,
                 model,
                 api_messages,
                 configured_context,
@@ -208,7 +206,6 @@ class AgentRunner:
             if tools.changed_files:
                 self._update_agents_file(
                     agents,
-                    client,
                     model,
                     configured_context,
                     tools,
@@ -249,7 +246,7 @@ class AgentRunner:
                     callbacks.activity(
                         "memory", "Memory sync skipped", "Memory is unavailable.", "error"
                     )
-        except (OllamaError, RuntimeError, ValueError, OSError) as error:
+        except (BackendError, RuntimeError, ValueError, OSError) as error:
             if chat and project:
                 try:
                     export_chat(self.database, project.id, chat.id, project.path)
@@ -260,7 +257,6 @@ class AgentRunner:
 
     def _tool_loop(
         self,
-        client: OllamaClient,
         model: str,
         api_messages: list[dict],
         context_window: int,
@@ -268,9 +264,9 @@ class AgentRunner:
         tools: ProjectTools,
         chat: Chat,
         callbacks: AgentCallbacks,
-    ) -> tuple[str, ChatResult]:
+    ) -> tuple[str, ProviderChatResult]:
         visible_parts: list[str] = []
-        last_result = ChatResult("")
+        last_result = ProviderChatResult(content="")
         tool_definitions = ProjectTools.definitions()
         exact_floor = 0
         for round_number in range(1, self.settings.max_tool_rounds + 1):
@@ -285,7 +281,7 @@ class AgentRunner:
                     "LocalCode stopped before Ollama could silently discard earlier tool "
                     "results. The chat will be compacted for the next turn.",
                 )
-                last_result = ChatResult(
+                last_result = ProviderChatResult(
                     content="",
                     prompt_tokens=round_estimate,
                     done_reason="context_guard",
@@ -293,8 +289,9 @@ class AgentRunner:
                     counts_exact=False,
                 )
                 break
-            result = client.chat(
-                model=model,
+            result = run_chat(
+                model,
+                self.settings,
                 messages=api_messages,
                 context_window=context_window,
                 output_tokens=output_tokens,
@@ -328,7 +325,7 @@ class AgentRunner:
             )
             for call in result.tool_calls:
                 if self._cancel.is_set():
-                    last_result = ChatResult(
+                    last_result = ProviderChatResult(
                         content="",
                         done_reason="cancelled",
                         effective_context=result.effective_context or context_window,
@@ -456,9 +453,9 @@ class AgentRunner:
                 "error",
             )
             return False
-        client = OllamaClient(self.settings.ollama_url)
-        result = client.complete(
-            model=model,
+        result = run_complete(
+            model,
+            self.settings,
             system=COMPACTION_SYSTEM_PROMPT,
             prompt=source,
             context_window=context_window,
@@ -585,7 +582,6 @@ Messages to compact:
     def _update_agents_file(
         self,
         agents: AgentsFileManager,
-        client: OllamaClient,
         model: str,
         context_window: int,
         tools: ProjectTools,
@@ -600,8 +596,9 @@ Messages to compact:
             "running",
         )
         try:
-            result = client.complete(
-                model=model,
+            result = run_complete(
+                model,
+                self.settings,
                 system=AGENTS_UPDATE_SYSTEM_PROMPT,
                 prompt=agents.update_prompt(tools.changed_files, tools.commands),
                 context_window=context_window,
@@ -609,7 +606,7 @@ Messages to compact:
                 cancel=self._cancel,
             )
             if result.interrupted:
-                raise OllamaError("AGENTS.md update was cancelled.")
+                raise BackendError("AGENTS.md update was cancelled.")
             changed = agents.apply_model_update(result.content)
             detail = (
                 "Model-managed project guidance refreshed."
@@ -618,7 +615,7 @@ Messages to compact:
             )
             callbacks.activity("agents", "AGENTS.md updated", detail, "complete")
             self.database.add_activity(chat.id, "agents", "AGENTS.md updated", detail, "complete")
-        except (OllamaError, OSError, ValueError) as error:
+        except (BackendError, OSError, ValueError) as error:
             callbacks.activity("agents", "AGENTS.md update failed", str(error), "error")
             self.database.add_activity(
                 chat.id, "agents", "AGENTS.md update failed", str(error), "error"
@@ -637,6 +634,8 @@ Messages to compact:
         selected = chat.model or project.model or self.settings.default_model
         if selected:
             return selected
+        from .ollama import OllamaClient
+
         client = OllamaClient(self.settings.ollama_url)
         models = client.list_models()
         return models[0].name if models else ""
