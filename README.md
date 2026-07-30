@@ -27,6 +27,8 @@ fallback.
 - Create canonical `AGENTS.md` guidance for every added project and refresh its managed section
   after file-changing model turns without overwriting human notes.
 - Retrieve and archive project history through an isolated, bundled MemPalace checkout.
+- Choose code style from Ponytail (YAGNI minimal), Balanced, or Verbose, directly affecting
+  how much code and how many tokens the model produces per turn.
 
 ## Requirements
 
@@ -89,6 +91,20 @@ compacts before the next turn.
 Compaction creates a code-focused handoff containing user intent, durable decisions, changed file
 paths, test outcomes, and open work. It intentionally relies on current source files and
 `AGENTS.md` for implementation detail instead of treating a lossy chat summary as source code.
+
+## Code Styles
+
+LocalCode lets you set a code style in Preferences (Ctrl+,) that changes how the model
+approaches implementation. It's injected as a section of the system prompt every turn:
+
+- **Ponytail (YAGNI)** — uses a decision ladder to question whether each piece of code
+  needs to exist at all. Prioritises standard library and existing project utilities,
+  native platform features, and installed dependencies before writing anything new. The
+  rule is "minimum that works" with zero compromise on validation, error handling,
+  security, or accessibility. Ideal for API providers where you pay per token.
+- **Balanced (default)** — no additional guidance. The model behaves as it normally would.
+- **Verbose** — thorough with comments, docstrings, error messages, and usage examples.
+  Favours readability and maintainability over brevity.
 
 ## MemPalace
 

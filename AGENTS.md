@@ -15,6 +15,7 @@ updates project `AGENTS.md` files, and optionally retrieves with MemPalace.
 - `localcode/agent.py` orchestrates a turn, tool loops, context compaction, transcript export, and `AGENTS.md` refresh.
 - `localcode/backend.py` dispatches chat calls to Ollama or API providers based on model origin.
 - `localcode/ollama.py` implements the native Ollama HTTP and NDJSON APIs without third-party networking dependencies.
+- `localcode/prompts.py` owns the system prompt, style rules (Ponytail YAGNI, Balanced, Verbose), and compaction/AGENTS-update prompts.
 - `localcode/providers.py` implements an OpenAI-compatible SSE streaming client with `/v1/models` discovery.
 - `localcode/projects.py` contains project scanning and root-confined coding tools.
 - `localcode/database.py` persists projects, chats, full messages, activities, providers, and settings in SQLite.
