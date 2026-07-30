@@ -979,7 +979,7 @@ class MainWindow(Adw.ApplicationWindow):
         about = Adw.AboutDialog(
             application_name="LocalCode",
             application_icon="io.localcode.LocalCode",
-            developer_name="chukrobertson",
+            developer_name="chukrobertson with OpenCode",
             version="0.1.0",
             comments="Local-first Ollama coding for GNOME",
             website="https://github.com/chukrobertson/localcode",
