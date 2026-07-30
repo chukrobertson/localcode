@@ -441,8 +441,9 @@ class ProjectTools:
         timeout = min(300, max(1, int(arguments.get("timeout") or 120)))
         before = self._file_state()
         process = subprocess.Popen(
-            ["/bin/bash", "-lc", command],
+            ["/bin/bash", "-ilc", command],
             cwd=cwd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
