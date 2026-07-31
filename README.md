@@ -38,6 +38,32 @@ fallback.
 - Ollama running at `http://127.0.0.1:11434` (or an OpenAI-compatible API endpoint)
 - At least one model with the `completion` capability; tool support is strongly recommended
 
+## Choosing a Model
+
+LocalCode needs models that support both chat and tool calling. Use `ollama list`
+to see what you have, and `ollama pull <model>` to add a new one.
+
+| Model | Best for | Notes |
+|---|---|---|
+| **qwen3:14b** | Multi-step refactors, test suites, code reviews | Strongest tool calling and reasoning on consumer hardware. Use for complex work where you want it to get things right on the first pass. |
+| **mistral-nemo:12b** | Single-file edits, quick fixes, fast turns | Smaller footprint, lower latency. Good when you know exactly what you want and just need the change. |
+| **codellama:13b / :34b** | Pure code generation | Purpose-built for coding, no tool-calling overhead. Pair with a tool-calling model if you need the agent loop. |
+| **gemma4:e2b** (~5B) | Lightweight, quick feedback | Runs on modest hardware. Tool-capable but less precise than the 12-14B tier for complex tasks. |
+| **deepseek-coder-v2:16b** | Complex algorithm work, large codebases | Strong at understanding existing code. Good second choice if qwen3 isn't available. |
+
+**For most users:** start with `qwen3:14b` as your default. It handles the full
+range — reading, editing, testing, and reasoning about your code. Switch to a
+lighter model for simple one-line changes if you want faster response times.
+
+| Task | Recommended model | Code style |
+|---|---|---|
+| New feature from scratch | qwen3:14b | Balanced |
+| Complex bug fix | qwen3:14b | Balanced |
+| Simple refactor or rename | mistral-nemo:12b | Ponytail |
+| One-line edit | mistral-nemo:12b | Ponytail |
+| Code review request | qwen3:14b | Verbose |
+| Writing tests | qwen3:14b | Balanced |
+
 ## Run From Source
 
 ```bash
