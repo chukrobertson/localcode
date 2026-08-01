@@ -9,7 +9,11 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable
 
@@ -64,7 +68,10 @@ BINARY_SUFFIXES = {
     ".zip",
 }
 
-MUTATING_TOOLS = {"write_file", "replace_in_file", "delete_file", "run_command"}
+MUTATING_TOOLS = {
+    "write_file", "replace_in_file", "delete_file",
+    "run_command", "create_directory", "rename_file",
+}
 
 
 @dataclass(slots=True)
@@ -275,6 +282,59 @@ class ProjectTools:
                 },
                 ["command"],
             ),
+            _tool(
+                "create_directory",
+                "Create a directory and its parents inside the project.",
+                {"path": {"type": "string", "description": "Project-relative directory path"}},
+                ["path"],
+            ),
+            _tool(
+                "rename_file",
+                "Rename or move a file within the project.",
+                {
+                    "source": {"type": "string", "description": "Current project-relative path"},
+                    "target": {"type": "string", "description": "New project-relative path"},
+                },
+                ["source", "target"],
+            ),
+            _tool(
+                "git_diff",
+                "Show staged and unstaged Git changes.",
+                {
+                    "path": {
+                        "type": "string",
+                        "description": "Limit diff to this relative path or file (optional)",
+                    },
+                    "staged": {"type": "boolean", "description": "Only show staged changes"},
+                },
+            ),
+            _tool(
+                "git_log",
+                "Show recent Git commit history.",
+                {
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of commits to show, default 10",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Limit history to changes affecting this path (optional)",
+                    },
+                },
+            ),
+            _tool(
+                "web_fetch",
+                "Fetch the text content of a URL. Use for reading documentation, API "
+                "references, or changelogs. Only HTTP and HTTPS URLs are allowed.",
+                {
+                    "url": {"type": "string", "description": "Full URL to fetch"},
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Maximum characters to return, default 8000",
+                    },
+                },
+                ["url"],
+            ),
         ]
 
     def execute(self, name: str, arguments: dict[str, Any]) -> ToolResult:
@@ -287,7 +347,7 @@ class ProjectTools:
             if self.permission_mode == "read-only":
                 return ToolResult(name, "Blocked: this project is in read-only mode.", False)
             description = self._describe_mutation(name, arguments)
-            needs_approval = self.permission_mode == "ask" or name == "run_command"
+            needs_approval = self.permission_mode == "ask" or name in {"run_command", "web_fetch"}
             if needs_approval and (
                 not self.approve or not self.approve(name, description)
             ):
@@ -495,6 +555,99 @@ class ProjectTools:
             process.returncode == 0 and not cancelled and not timed_out,
         )
 
+    def _tool_create_directory(self, arguments: dict[str, Any]) -> ToolResult:
+        relative = str(arguments.get("path") or "")
+        if not relative or relative == ".":
+            raise ValueError("path must name a directory")
+        path = resolve_inside(self.root, relative)
+        if path == self.root:
+            raise ValueError("path must name a directory, not the project root")
+        if path.is_file():
+            raise ValueError("path already exists as a file")
+        path.mkdir(parents=True, exist_ok=True)
+        return ToolResult("create_directory", f"Ready: {relative}")
+
+    def _tool_rename_file(self, arguments: dict[str, Any]) -> ToolResult:
+        source_rel = str(arguments.get("source") or "")
+        target_rel = str(arguments.get("target") or "")
+        if not source_rel or not target_rel:
+            raise ValueError("source and target are required")
+        reject_symlink_components(self.root, source_rel)
+        reject_symlink_components(self.root, target_rel)
+        source = resolve_inside(self.root, source_rel, must_exist=True)
+        if not source.is_file():
+            raise ValueError("source must be a file")
+        target = resolve_inside(self.root, target_rel)
+        if target.exists():
+            raise ValueError("target already exists")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(target)
+        self.changed_files.discard(source_rel)
+        self.changed_files.add(target_rel)
+        return ToolResult(
+            "rename_file", f"Moved {source_rel} → {target_rel}.", True, target_rel
+        )
+
+    def _tool_git_diff(self, arguments: dict[str, Any]) -> ToolResult:
+        if not (self.root / ".git").exists():
+            return ToolResult("git_diff", "Not a Git repository.", False)
+        args = ["git", "diff", "--no-color", "--no-ext-diff"]
+        if arguments.get("staged"):
+            args.append("--staged")
+        path_arg = str(arguments.get("path") or "")
+        if path_arg:
+            args.extend(["--", path_arg])
+        result = subprocess.run(
+            args, cwd=self.root, capture_output=True, text=True, errors="replace",
+            timeout=15, check=False,
+        )
+        output = (result.stdout or result.stderr).strip()
+        if len(output) > 30000:
+            output = output[:30000] + "\n... (diff truncated)"
+        return ToolResult("git_diff", output or "No changes.")
+
+    def _tool_git_log(self, arguments: dict[str, Any]) -> ToolResult:
+        if not (self.root / ".git").exists():
+            return ToolResult("git_log", "Not a Git repository.", False)
+        count = min(50, max(1, int(arguments.get("count") or 10)))
+        args = [
+            "git", "log", f"-{count}", "--oneline", "--no-color",
+        ]
+        path_arg = str(arguments.get("path") or "")
+        if path_arg:
+            args.extend(["--", path_arg])
+        result = subprocess.run(
+            args, cwd=self.root, capture_output=True, text=True, errors="replace",
+            timeout=10, check=False,
+        )
+        return ToolResult("git_log", (result.stdout or result.stderr).strip() or "No commits.")
+
+    def _tool_web_fetch(self, arguments: dict[str, Any]) -> ToolResult:
+        url = str(arguments.get("url") or "").strip()
+        if not url:
+            raise ValueError("url is required")
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("Only http and https URLs are allowed.")
+        if parsed.hostname in {"127.0.0.1", "localhost", "::1"}:
+            raise ValueError("Loopback URLs are not allowed for security.")
+        max_chars = min(30000, max(500, int(arguments.get("max_chars") or 8000)))
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "LocalCode/0.1", "Accept": "text/plain,text/html"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                data = response.read(max_chars + 1)
+        except urllib.error.URLError as error:
+            return ToolResult("web_fetch", f"Cannot reach {url}: {error.reason}", False)
+        content = data.decode("utf-8", errors="replace")[:max_chars]
+        stripped = _strip_html(content)
+        if len(stripped.strip()) < 20:
+            stripped = content
+        summary = f"Fetched {url} ({len(data)} bytes)"
+        return ToolResult("web_fetch", f"{summary}\n\n{stripped}")
+
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
         mode = path.stat().st_mode if path.exists() else None
@@ -546,3 +699,23 @@ def _tool(
             },
         },
     }
+
+
+class _TextHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+
+def _strip_html(text: str) -> str:
+    if "<" not in text:
+        return text
+    parser = _TextHTMLParser()
+    try:
+        parser.feed(text)
+    except Exception:
+        return text
+    return " ".join(parser.parts)

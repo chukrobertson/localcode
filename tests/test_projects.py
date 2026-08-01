@@ -107,6 +107,31 @@ class ProjectToolsTests(unittest.TestCase):
         self.assertIn("Cancelled", results[0].output)
         self.assertLess(time.monotonic() - started, 3)
 
+    def test_create_and_rename_directory_and_file(self) -> None:
+        tools = ProjectTools(self.root, permission_mode="allow")
+        result = tools.execute("create_directory", {"path": "src/lib"})
+        self.assertTrue(result.success)
+        self.assertTrue((self.root / "src" / "lib").is_dir())
+        (self.root / "src" / "lib" / "mod.py").write_text("# module", encoding="utf-8")
+        result = tools.execute(
+            "rename_file", {"source": "src/lib/mod.py", "target": "src/mod.py"}
+        )
+        self.assertTrue(result.success)
+        self.assertTrue((self.root / "src" / "mod.py").is_file())
+        self.assertFalse((self.root / "src" / "lib" / "mod.py").exists())
+
+    def test_git_diff_and_log_require_git_repo(self) -> None:
+        tools = ProjectTools(self.root, permission_mode="allow")
+        self.assertFalse(tools.execute("git_diff", {}).success)
+        self.assertFalse(tools.execute("git_log", {}).success)
+
+    def test_web_fetch_rejects_loopback(self) -> None:
+        tools = ProjectTools(self.root, permission_mode="allow")
+        result = tools.execute("web_fetch", {"url": "http://127.0.0.1:9999/test"})
+        self.assertFalse(result.success)
+        result = tools.execute("web_fetch", {"url": "file:///etc/passwd"})
+        self.assertFalse(result.success)
+
 
 if __name__ == "__main__":
     unittest.main()
