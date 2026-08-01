@@ -47,6 +47,9 @@ class MemPalaceManager:
     def managed_home(self) -> Path:
         return data_dir() / "mempalace" / "home"
 
+    def _env_file(self, venv: Path | None = None) -> Path:
+        return (venv or self.managed_venv).parent / "mempalace.env"
+
     def executable(self) -> str | None:
         command = self._command()
         if not command:
@@ -88,8 +91,6 @@ class MemPalaceManager:
         if create.returncode == 0:
             command = [str(venv / "bin" / "python"), "-m", "pip", "install", str(source)]
         else:
-            # Ubuntu may ship PyGObject's Python without python3-venv/ensurepip.
-            # pip --target still gives MemPalace an isolated import tree and needs no sudo.
             pip_probe = subprocess.run(
                 [sys.executable, "-m", "pip", "--version"],
                 capture_output=True,
@@ -122,7 +123,41 @@ class MemPalaceManager:
             raise RuntimeError((install.stderr or install.stdout).strip()[-8000:])
         if progress:
             progress("MemPalace installed.")
+
+        if create.returncode == 0:
+            self._install_gpu_packages(venv, progress)
+
         return self.status()
+
+    def _install_gpu_packages(
+        self, venv: Path, progress: Callable[[str], None] | None = None
+    ) -> None:
+        try:
+            gpu_check = subprocess.run(
+                ["nvidia-smi"], capture_output=True, timeout=10, check=False
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        if gpu_check.returncode:
+            return
+        if progress:
+            progress("NVIDIA GPU detected — installing CUDA ONNX Runtime...")
+        use_venv = (venv / "bin" / "pip").is_file()
+        pip_cmd = [str(venv / "bin" / "pip")] if use_venv else [
+            sys.executable, "-m", "pip", "install", "--target", str(self.managed_site_packages),
+        ]
+        gpu_install = subprocess.run(
+            [*pip_cmd, "onnxruntime-gpu"],
+            capture_output=True, text=True, timeout=600, check=False,
+        )
+        if gpu_install.returncode:
+            print("GPU ONNX Runtime install skipped (CUDA toolkit may not be available).")
+            return
+        env_path = data_dir() / "mempalace" / "mempalace.env"
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        env_path.write_text("MEMPALACE_EMBEDDING_DEVICE=cuda\n")
+        if progress:
+            progress("CUDA acceleration configured for MemPalace embeddings.")
 
     def initialize_project(self, project: Project, *, model: str = "") -> tuple[bool, str]:
         if not self.executable():
@@ -374,6 +409,12 @@ class MemPalaceManager:
                 "PYTHONUNBUFFERED": "1",
             }
         )
+        env_file = self._env_file()
+        if env_file.is_file():
+            for line in env_file.read_text().strip().splitlines():
+                if "=" in line and not line.startswith("#"):
+                    var, _, value = line.partition("=")
+                    env[var.strip()] = value.strip()
         env.pop("PYTHONPATH", None)
         try:
             if cancel is not None:
