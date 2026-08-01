@@ -37,6 +37,7 @@ class AgentCallbacks:
     complete: Callable[[str], None] = _noop
     error: Callable[[str], None] = _noop
     approval: Callable[[str, str], bool] | None = None
+    ask_user: Callable[[str, str], str] | None = None
 
 
 class AgentRunner:
@@ -130,6 +131,7 @@ class AgentRunner:
                 project.path,
                 permission_mode=project.permission_mode,
                 approve=callbacks.approval,
+                ask=callbacks.ask_user,
                 cancel=self._cancel,
             )
             callbacks.phase(f"Running {model}")

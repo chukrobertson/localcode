@@ -200,11 +200,13 @@ class ProjectTools:
         *,
         permission_mode: str = "ask",
         approve: ApprovalCallback | None = None,
+        ask: Callable[[str, str], str | None] | None = None,
         cancel: threading.Event | None = None,
     ) -> None:
         self.root = Path(root).expanduser().resolve()
         self.permission_mode = permission_mode
         self.approve = approve
+        self.ask = ask
         self.cancel = cancel
         self.changed_files: set[str] = set()
         self.commands: list[str] = []
@@ -334,6 +336,72 @@ class ProjectTools:
                     },
                 },
                 ["url"],
+            ),
+            _tool(
+                "read_files",
+                "Read multiple files at once. Returns each file with a header containing "
+                "its relative path and line count. Use this to inspect several related "
+                "source files in one step instead of calling read_file repeatedly.",
+                {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Project-relative file paths, at most 8",
+                    },
+                },
+                ["paths"],
+            ),
+            _tool(
+                "edit_file",
+                "Read a file, apply a list of find-and-replace changes, and write the "
+                "result. Each replacement is applied in order. This combines a read and "
+                "one or more replacements into a single round trip.",
+                {
+                    "path": {"type": "string", "description": "Project-relative file path"},
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_text": {"type": "string", "description": "Text to replace"},
+                                "new_text": {"type": "string", "description": "Replacement"},
+                            },
+                            "required": ["old_text", "new_text"],
+                        },
+                        "description": "Ordered list of find-and-replace edits",
+                    },
+                },
+                ["path", "edits"],
+            ),
+            _tool(
+                "run_lint",
+                "Run the project's lint, typecheck, or format-check command. LocalCode "
+                "auto-detects the right command from project manifests (pyproject.toml, "
+                "package.json, Cargo.toml, etc.). Pass a specific command to override.",
+                {
+                    "kind": {
+                        "type": "string",
+                        "description": "Which check to run: lint, typecheck, test, or custom",
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "Override command instead of auto-detection (optional)",
+                    },
+                },
+            ),
+            _tool(
+                "ask_user",
+                "Ask the user a question when you need to resolve an ambiguity. The "
+                "answer is returned as a string. Use this to clarify intent, confirm "
+                "a direction before making a large change, or choose between options.",
+                {
+                    "question": {"type": "string", "description": "The question to display"},
+                    "detail": {
+                        "type": "string",
+                        "description": "Additional context or options (optional)",
+                    },
+                },
+                ["question"],
             ),
         ]
 
@@ -647,6 +715,113 @@ class ProjectTools:
             stripped = content
         summary = f"Fetched {url} ({len(data)} bytes)"
         return ToolResult("web_fetch", f"{summary}\n\n{stripped}")
+
+    def _tool_read_files(self, arguments: dict[str, Any]) -> ToolResult:
+        paths = arguments.get("paths") or []
+        if not isinstance(paths, list) or not paths:
+            raise ValueError("paths must be a non-empty list of file paths")
+        if len(paths) > 8:
+            raise ValueError("at most 8 files per batch read")
+        parts: list[str] = []
+        for relative in paths:
+            path = resolve_inside(self.root, str(relative), must_exist=True)
+            if not path.is_file() or path.suffix.casefold() in BINARY_SUFFIXES:
+                parts.append(f"\n=== {relative} ===\n[not a readable text file]\n")
+                continue
+            if path.stat().st_size > 2_000_000:
+                parts.append(f"\n=== {relative} ===\n[file exceeds 2 MB read limit]\n")
+                continue
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            rendered = "\n".join(
+                f"{index:>6}  {lines[index - 1]}" for index in range(1, min(len(lines), 601) + 1)
+            )
+            if len(lines) > 600:
+                rendered += f"\n... ({len(lines) - 600} more lines)"
+            parts.append(f"\n=== {relative} ({len(lines)} lines) ===\n{rendered}\n")
+        return ToolResult("read_files", "".join(parts))
+
+    def _tool_edit_file(self, arguments: dict[str, Any]) -> ToolResult:
+        relative = str(arguments.get("path") or "")
+        edits = arguments.get("edits") or []
+        if not isinstance(edits, list) or not edits:
+            raise ValueError("edits must be a non-empty list of changes")
+        reject_symlink_components(self.root, relative)
+        path = resolve_inside(self.root, relative, must_exist=True)
+        if not path.is_file():
+            raise ValueError("path must be a file")
+        content = path.read_text(encoding="utf-8")
+        for edit in edits:
+            old_text = str(edit.get("old_text") or "")
+            new_text = str(edit.get("new_text") or "")
+            if not old_text:
+                raise ValueError("each edit must have non-empty old_text")
+            count = content.count(old_text)
+            if count == 0:
+                raise ValueError(f"old_text not found: {old_text[:80]}")
+            if count > 1:
+                raise ValueError(
+                    f"old_text occurs {count} times; provide more context or split this edit"
+                )
+            content = content.replace(old_text, new_text, 1)
+        self._atomic_write(path, content)
+        self.changed_files.add(relative)
+        return ToolResult(
+            "edit_file",
+            f"Applied {len(edits)} edit{'s' if len(edits) != 1 else ''} to {relative}.",
+            True,
+            relative,
+        )
+
+    def _tool_run_lint(self, arguments: dict[str, Any]) -> ToolResult:
+        custom = str(arguments.get("command") or "")
+        if custom:
+            command = custom
+        else:
+            kind = str(arguments.get("kind") or "").casefold()
+            commands = detect_project_commands(self.root)
+            candidates = [cmd for cmd in commands if kind in cmd.casefold()]
+            if not candidates:
+                return ToolResult(
+                    "run_lint",
+                    "No matching project command found. Pass an explicit command to override.",
+                    False,
+                )
+            command = candidates[0]
+        result = subprocess.run(
+            ["/bin/bash", "-ilc", command],
+            cwd=self.root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+            timeout=120,
+            check=False,
+            env={**os.environ, "PAGER": "cat", "GIT_PAGER": "cat"},
+        )
+        self.commands.append(command)
+        output = (result.stdout + result.stderr).strip()
+        if len(output) > 30000:
+            output = output[:30000] + "\n... (output truncated)"
+        return ToolResult(
+            "run_lint",
+            f"{command}\nExit code: {result.returncode}\n{output}"
+            if output
+            else f"{command}\nPassed.",
+            result.returncode == 0,
+        )
+
+    def _tool_ask_user(self, arguments: dict[str, Any]) -> ToolResult:
+        question = str(arguments.get("question") or "").strip()
+        detail = str(arguments.get("detail") or "")
+        if not question:
+            raise ValueError("question is required")
+        if not self.ask:
+            return ToolResult("ask_user", "User interaction is not available.", False)
+        answer = self.ask(question, detail)
+        if answer is None:
+            return ToolResult("ask_user", "The user dismissed the question.", False)
+        return ToolResult("ask_user", answer, True)
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:

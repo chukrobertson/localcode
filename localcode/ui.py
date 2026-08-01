@@ -530,6 +530,7 @@ class MainWindow(Adw.ApplicationWindow):
             complete=lambda value: self._idle(self._turn_complete, chat_id, value),
             error=lambda value: self._idle(self._turn_error, chat_id, value),
             approval=self._request_approval,
+            ask_user=self._request_answer,
         )
         def worker() -> None:
             try:
@@ -664,6 +665,84 @@ class MainWindow(Adw.ApplicationWindow):
                 self._idle(lambda: holder.get("dialog") and holder["dialog"].close())
                 return False
         return answer["allowed"]
+
+    def _request_answer(self, question: str, detail: str) -> str | None:
+        completed = threading.Event()
+        answer: dict[str, str | None] = {"text": None}
+
+        def show_dialog() -> bool:
+            if self.runner.is_cancelled():
+                completed.set()
+                return GLib.SOURCE_REMOVE
+            window = Gtk.Window(title="LocalCode")
+            window.set_modal(True)
+            window.set_transient_for(self)
+            window.set_default_size(480, -1)
+            window.connect("close-request", lambda _w: (completed.set(), True)[1])
+
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+            box.set_margin_top(22)
+            box.set_margin_bottom(22)
+            box.set_margin_start(24)
+            box.set_margin_end(24)
+
+            question_label = Gtk.Label(label=question, xalign=0, wrap=True)
+            question_label.add_css_class("heading")
+            box.append(question_label)
+            if detail:
+                detail_label = Gtk.Label(label=detail, xalign=0, wrap=True)
+                detail_label.add_css_class("caption")
+                detail_label.add_css_class("dim-label")
+                box.append(detail_label)
+
+            entry = Gtk.Entry(hexpand=True, activates_default=True)
+            entry.set_placeholder_text("Type your answer...")
+            box.append(entry)
+
+            buttons = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8, halign=Gtk.Align.END
+            )
+            cancel = Gtk.Button(label="Skip")
+            cancel.add_css_class("flat")
+            cancel.connect("clicked", lambda _b: (window.close(), completed.set()))
+            buttons.append(cancel)
+
+            send = Gtk.Button(label="Answer")
+            send.add_css_class("suggested-action")
+            send.add_css_class("pill")
+
+            def on_send(_b):
+                text = entry.get_text().strip()
+                if text:
+                    answer["text"] = text
+                window.close()
+                completed.set()
+
+            send.connect("clicked", on_send)
+            entry.connect("activate", lambda _e: on_send(send))
+            buttons.append(send)
+            box.append(buttons)
+
+            window.set_child(box)
+            key_controller = Gtk.EventControllerKey()
+
+            def on_key(_ctrl, keyval, _kc, state):
+                if keyval == Gdk.KEY_Escape:
+                    window.close()
+                    completed.set()
+                    return True
+                return False
+
+            key_controller.connect("key-pressed", on_key)
+            window.add_controller(key_controller)
+            window.present()
+            return GLib.SOURCE_REMOVE
+
+        GLib.idle_add(show_dialog)
+        while not completed.wait(0.1):
+            if self.runner.is_cancelled():
+                return None
+        return answer["text"]
 
     def _choose_project(self) -> None:
         dialog = Gtk.FileDialog(

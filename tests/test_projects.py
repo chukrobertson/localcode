@@ -132,6 +132,53 @@ class ProjectToolsTests(unittest.TestCase):
         result = tools.execute("web_fetch", {"url": "file:///etc/passwd"})
         self.assertFalse(result.success)
 
+    def test_batch_read_files(self) -> None:
+        tools = ProjectTools(self.root, permission_mode="allow")
+        (self.root / "a.py").write_text("a = 1\n", encoding="utf-8")
+        (self.root / "b.py").write_text("b = 2\n", encoding="utf-8")
+        result = tools.execute("read_files", {"paths": ["a.py", "b.py"]})
+        self.assertTrue(result.success)
+        self.assertIn("=== a.py", result.output)
+        self.assertIn("=== b.py", result.output)
+        self.assertIn("a = 1", result.output)
+        self.assertIn("b = 2", result.output)
+
+    def test_edit_file_applies_multiple_changes(self) -> None:
+        tools = ProjectTools(self.root, permission_mode="allow")
+        (self.root / "cfg.py").write_text("host = 'old'\nport = 3000\n", encoding="utf-8")
+        result = tools.execute(
+            "edit_file",
+            {
+                "path": "cfg.py",
+                "edits": [
+                    {"old_text": "host = 'old'", "new_text": "host = 'new'"},
+                    {"old_text": "port = 3000", "new_text": "port = 4000"},
+                ],
+            },
+        )
+        self.assertTrue(result.success)
+        content = (self.root / "cfg.py").read_text(encoding="utf-8")
+        self.assertEqual(content, "host = 'new'\nport = 4000\n")
+
+    def test_run_lint_uses_autodetected_command(self) -> None:
+        (self.root / "pyproject.toml").write_text(
+            "[project]\nname='test'\n", encoding="utf-8"
+        )
+        tools = ProjectTools(self.root, permission_mode="allow")
+        result = tools.execute("run_lint", {"kind": "compileall"})
+        self.assertIn("compileall", result.output)
+        self.assertTrue(result.success)
+
+    def test_ask_user_returns_callback_result(self) -> None:
+        tools = ProjectTools(
+            self.root,
+            permission_mode="allow",
+            ask=lambda question, detail: f"answer: {question}",
+        )
+        result = tools.execute("ask_user", {"question": "which file?", "detail": "a or b"})
+        self.assertTrue(result.success)
+        self.assertEqual(result.output, "answer: which file?")
+
 
 if __name__ == "__main__":
     unittest.main()
