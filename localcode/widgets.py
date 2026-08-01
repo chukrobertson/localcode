@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from datetime import datetime, timezone
 
 import gi
 
@@ -352,7 +353,14 @@ def _one_line(value: str) -> str:
 def _short_time(timestamp: str) -> str:
     if "T" not in timestamp:
         return ""
-    return timestamp.split("T", 1)[1][:5]
+    try:
+        utc = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if utc.tzinfo is None:
+            utc = utc.replace(tzinfo=timezone.utc)
+        local = utc.astimezone()
+        return local.strftime("%H:%M")
+    except ValueError:
+        return timestamp.split("T", 1)[1][:5]
 
 
 def _chat_subtitle(chat: Chat) -> str:
