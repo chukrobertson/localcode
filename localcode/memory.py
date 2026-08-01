@@ -33,6 +33,7 @@ class MemPalaceManager:
         ] = {}
         self._sync_thread: threading.Thread | None = None
         self._maintenance_threads: set[threading.Thread] = set()
+        self._last_sync: dict[str, float] = {}
 
     @property
     def managed_venv(self) -> Path:
@@ -229,6 +230,10 @@ class MemPalaceManager:
     ) -> threading.Thread | None:
         if (not project.memory_enabled and not force) or not self.executable():
             return None
+        if not force:
+            last = self._last_sync.get(project.id, 0)
+            if time.monotonic() - last < 60:
+                return None
         with self._queue_lock:
             queued = self._pending.get(project.id)
             callbacks = queued[1] if queued else []
@@ -329,6 +334,7 @@ class MemPalaceManager:
                 result = self.sync_project(project, force=force)
             except Exception as error:
                 result = (False, str(error))
+            self._last_sync[project.id] = time.monotonic()
             for callback in callbacks:
                 try:
                     callback(*result)

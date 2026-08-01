@@ -234,7 +234,6 @@ class AgentRunner:
             callbacks.complete(final_content)
             callbacks.phase("Ready")
             if project.memory_enabled and self.settings.mempalace_enabled:
-                callbacks.activity("memory", "Memory sync queued", str(transcript), "running")
                 worker = self.memory.sync_in_background(
                     project,
                     lambda success, detail: callbacks.activity(
@@ -244,10 +243,8 @@ class AgentRunner:
                         "complete" if success else "error",
                     ),
                 )
-                if worker is None:
-                    callbacks.activity(
-                        "memory", "Memory sync skipped", "Memory is unavailable.", "error"
-                    )
+                if worker is not None:
+                    callbacks.activity("memory", "Memory sync queued", str(transcript), "running")
         except (BackendError, RuntimeError, ValueError, OSError) as error:
             if chat and project:
                 try:
