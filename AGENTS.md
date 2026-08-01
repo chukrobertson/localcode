@@ -17,9 +17,11 @@ updates project `AGENTS.md` files, and optionally retrieves with MemPalace.
 - `localcode/ollama.py` implements the native Ollama HTTP and NDJSON APIs without third-party networking dependencies.
 - `localcode/prompts.py` owns the system prompt, style rules (Ponytail YAGNI, Balanced, Verbose), and compaction/AGENTS-update prompts.
 - `localcode/providers.py` implements an OpenAI-compatible SSE streaming client with `/v1/models` discovery.
-- `localcode/projects.py` contains project scanning and root-confined coding tools.
+- `localcode/projects.py` contains project scanning and root-confined coding tools
+  including batch reads, sourced edits, Git inspection, web fetching, and user prompts.
 - `localcode/database.py` persists projects, chats, full messages, activities, providers, and settings in SQLite.
-- `localcode/memory.py` installs and invokes the isolated MemPalace companion.
+- `localcode/memory.py` installs and invokes the isolated MemPalace companion with
+  automatic GPU detection for CUDA-accelerated embeddings.
 - `localcode/context.py` owns conservative preflight estimates and exact post-response status classification.
 - `tests/` uses the Python standard library `unittest` runner.
 

@@ -15,20 +15,39 @@ fallback.
 - Discover local Ollama completion models and stream their responses.
 - Add any OpenAI-compatible API provider (LM Studio, vLLM, llama.cpp server, cloud APIs, LAN
   machines) and browse their models in the same dropdown.
-- Let tool-capable models list, search, read, write, replace, and delete project files or run tests.
-- Keep every file tool confined to the selected project root, including symlink resolution.
-- Require per-command confirmation for shell execution even when file changes are otherwise allowed;
-  shell commands are powerful and are not an operating-system sandbox.
-- Choose `Ask before changes`, `Allow changes`, or `Read only` per project.
-- Show estimated preflight context and exact token counts after every agent step.
-- Detect generation-time context exhaustion from the model's effective loaded context and counters.
-- Stop tool loops before their accumulated output can trigger silent input truncation.
-- Compact older turns automatically while retaining the complete SQLite and JSONL transcript.
-- Create canonical `AGENTS.md` guidance for every added project and refresh its managed section
-  after file-changing model turns without overwriting human notes.
-- Retrieve and archive project history through an isolated, bundled MemPalace checkout.
-- Choose code style from Ponytail (YAGNI minimal), Balanced, or Verbose, directly affecting
-  how much code and how many tokens the model produces per turn.
+- Choose code style from Ponytail (YAGNI minimal), Balanced, or Verbose, controlling how
+  much code the model produces per turn.
+- Maintain canonical `AGENTS.md` guidance for every added project, auto-refreshed after
+  file-changing turns without overwriting human notes.
+- Optional MemPalace integration for verbatim local memory and retrieval, with automatic
+  CUDA GPU acceleration when an NVIDIA GPU is detected.
+- Per-project approval controls: `Ask before changes`, `Allow changes`, or `Read only`.
+
+## Model Tools
+
+The model has access to these tools for reading, editing, and inspecting the project:
+
+| Tool | Description |
+|---|---|
+| `read_file` | Read any text file with line numbers |
+| `read_files` | Batch-read up to 8 files in a single call |
+| `write_file` | Create or replace a file atomically |
+| `edit_file` | Apply multiple find-and-replace edits to a file in one step |
+| `replace_in_file` | Single find-and-replace in a file |
+| `delete_file` | Delete a project file |
+| `create_directory` | Create a directory and its parents |
+| `rename_file` | Rename or move a file within the project |
+| `list_files` | List project files, optionally filtered by glob |
+| `search_files` | Search project files for text or regex patterns |
+| `run_command` | Run any shell command inside the project (always requires approval) |
+| `run_lint` | Auto-detect and run a project's lint, typecheck, or test command |
+| `git_diff` | Show staged and unstaged changes |
+| `git_log` | Show recent commit history |
+| `web_fetch` | Read a URL (loopback blocked, always requires approval) |
+| `ask_user` | Prompt the user with a question when ambiguous |
+
+**Security:** every file tool is confined to the project root and rejects symlinks that escape it.
+Shell commands run in an interactive login shell to match your full environment.
 
 ## Requirements
 
@@ -149,9 +168,13 @@ When memory is enabled for a project, LocalCode:
 - searches the project wing before a model turn and labels retrieval as potentially stale;
 - treats retrieved text as untrusted reference data rather than model instructions;
 - exports the complete LocalCode chat as compatible JSONL records;
-- mines project files and transcripts after completed turns;
+- mines project files and transcripts after completed turns, throttled to once per minute;
 - scopes each project to a stable ID-suffixed wing and prunes deleted or newly ignored sources;
 - performs a synchronous transcript export before context compaction.
+
+On first installation, LocalCode detects NVIDIA GPUs via `nvidia-smi` and automatically
+installs `onnxruntime-gpu` with `MEMPALACE_EMBEDDING_DEVICE=cuda`, so the embedding model
+loads and runs on the GPU instead of CPU.
 
 LocalCode invokes `mine` directly, so it does not create or overwrite `mempalace.yaml`,
 `entities.json`, or `.gitignore` in an added project. MemPalace may download its local embedding
