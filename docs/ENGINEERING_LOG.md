@@ -6,6 +6,27 @@ how it was verified so a later session can continue without rediscovering anythi
 
 ## Passes
 
+### Pass 16 — Reproducible real-model evaluation harness (2026-09)
+
+- **Motivation:** reliability fixes through Pass 15F came from valuable but ad-hoc live-model
+  trials. Unit tests preserved each discovered failure, but there was no repeatable way to compare
+  actual Ollama models or detect behavioral regressions before another daily-driver session.
+- **Harness:** `python3 -m localcode.evals` now runs named scenarios in disposable project and app
+  directories. The initial smoke suite covers a focused verified repair, inspection without
+  mutation, and read-only enforcement. Each result scores runtime errors, checkpoint status,
+  required and unexpected file changes, recorded tools and commands, independent verification,
+  `AGENTS.md` permission behavior, and response presence.
+- **Safety and reporting:** shell actions are approved only when the complete approval description
+  exactly matches a built-in scenario command and root working directory; suffix matches,
+  multi-line prefixes, alternate working directories, lint auto-detection, and network tools are
+  denied. Reports aggregate streaming metrics rather than storing every token chunk, retain
+  bounded structured activities and model usage, print a compact terminal table, and write atomic
+  timestamped JSON under the ignored `eval-results/` directory by default.
+- **Verification:** five harness tests cover scenario invariants, exact command approval including
+  a multi-line injection shape, evidence-based scoring, JSON round trips, and list mode. The full
+  Granite `granite4.2:8b` suite passed all three scenarios in 25.3 seconds; a second verified-edit
+  run passed after the stricter approval parser was applied.
+
 ### Pass 15F — Verification-loop guard across edits (2026-09)
 
 - **Observed failure:** while asked to replace one focused test file and run one unittest command,

@@ -11,3 +11,4 @@ dist/
 vendor/mempalace/.git/
 localcode.db
 data/
+eval-results/

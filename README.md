@@ -134,6 +134,34 @@ sudo systemctl restart ollama
 | Code review request | qwen3:14b | Standard |
 | Writing tests | qwen3:8b | Standard |
 
+## Agent Evaluations
+
+LocalCode includes a dependency-free headless evaluation runner for checking real agent behavior
+against installed Ollama models. Every scenario uses a disposable project and isolated database,
+config, cache, and transcript directories. Shell tools are denied unless the command exactly
+matches that scenario's built-in allowlist.
+
+Run all smoke scenarios for a model:
+
+```bash
+python3 -m localcode.evals --model granite4.2:8b
+```
+
+Run one scenario, retain its disposable workspace for inspection, or compare another model:
+
+```bash
+python3 -m localcode.evals --model qwen3:8b --scenario verified_edit
+python3 -m localcode.evals --model gemma4:12b --scenario inspect_only --keep-workdirs
+python3 -m localcode.evals --list
+```
+
+The runner scores runtime completion, checkpoint state, required and unexpected file changes,
+tool and command evidence, independent verification, `AGENTS.md` permission behavior, and final
+response presence. It prints a compact terminal table and writes a timestamped JSON report under
+`eval-results/` by default. Use `--output` to select a different report path. Reports contain the
+structured checks, token counts, continuation count, tool activities, notices, and retained
+workspace path when requested; they never include provider API keys.
+
 ## Run From Source
 
 ```bash
