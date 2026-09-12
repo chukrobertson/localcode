@@ -153,6 +153,80 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _replace_unique_horizontal_whitespace_variant(
+    content: str,
+    old_text: str,
+    new_text: str,
+) -> tuple[str, int] | None:
+    """Replace one matching token sequence while preserving source whitespace.
+
+    Small models often reproduce the correct lines with the wrong indentation width. This
+    fallback accepts only horizontal-whitespace differences: line breaks and every non-whitespace
+    token from ``old_text`` must still match, the old/new token layouts must align, and the source
+    match must be unique. Existing source whitespace is retained in the replacement.
+    """
+
+    token_pattern = r"[ \t]+|\r\n|\n|\r|[^ \t\r\n]+"
+    old_parts = re.findall(token_pattern, old_text)
+    new_parts = re.findall(token_pattern, new_text)
+    if not old_parts or len(old_parts) != len(new_parts):
+        return None
+
+    def category(part: str) -> str:
+        if part in {"\r\n", "\n", "\r"}:
+            return "newline"
+        return "horizontal" if part.isspace() else "token"
+
+    categories = [category(part) for part in old_parts]
+    if categories != [category(part) for part in new_parts]:
+        return None
+    if "horizontal" not in categories:
+        return None
+
+    pattern_parts: list[str] = []
+    for part, part_category in zip(old_parts, categories, strict=True):
+        if part_category == "horizontal":
+            pattern_parts.append(r"([ \t]+)")
+        elif part_category == "newline":
+            pattern_parts.append(r"(\r\n|\n|\r)")
+        else:
+            pattern_parts.append(re.escape(part))
+    matches = []
+    for candidate in re.finditer("".join(pattern_parts), content):
+        starts_inside_token = (
+            categories[0] == "token"
+            and candidate.start() > 0
+            and not content[candidate.start() - 1].isspace()
+        )
+        ends_inside_token = (
+            categories[-1] == "token"
+            and candidate.end() < len(content)
+            and not content[candidate.end()].isspace()
+        )
+        if not starts_inside_token and not ends_inside_token:
+            matches.append(candidate)
+    if len(matches) != 1:
+        return None
+
+    match = matches[0]
+    whitespace = iter(match.groups())
+    replacement_parts: list[str] = []
+    for part, part_category in zip(new_parts, categories, strict=True):
+        replacement_parts.append(next(whitespace) if part_category != "token" else part)
+    replacement = "".join(replacement_parts)
+    updated = content[:match.start()] + replacement + content[match.end():]
+    return updated, match.start()
+
+
+def _exact_edit_miss(relative: str, old_text: str = "") -> ValueError:
+    excerpt = f": {old_text[:80]}" if old_text else ""
+    return ValueError(
+        f"old_text was not found in {relative}{excerpt}. Do not repeat an unchanged read. If "
+        "the relevant lines were already read, use replace_lines with those verified line "
+        "numbers; otherwise read one narrow range first."
+    )
+
+
 def _render_numbered_lines(
     lines: list[str], start: int, end: int, *, max_chars: int
 ) -> tuple[str, int]:
@@ -441,7 +515,8 @@ TOOL_SPECS = (
     ),
     _spec(
         "replace_in_file",
-        "Replace exact text in a file. Fails when the text is missing or ambiguous.",
+        "Replace text in a file. Exact matches are preferred; one uniquely identifiable match "
+        "with horizontal-whitespace drift is repaired without changing source formatting.",
         {
             "path": {"type": "string", "description": "Project-relative file path"},
             "old_text": {"type": "string", "minLength": 1, "description": "Exact text"},
@@ -591,7 +666,8 @@ TOOL_SPECS = (
     ),
     _spec(
         "edit_file",
-        "Apply up to 8 small exact replacements to one file atomically. Keep each old "
+        "Apply up to 8 small replacements to one file atomically. Exact matches are preferred; "
+        "a unique horizontal-whitespace variation can recover indentation drift. Keep each old "
         "and new text localized so the JSON tool call remains reliable.",
         {
             "path": {"type": "string", "description": "Project-relative file path"},
@@ -923,16 +999,25 @@ class ProjectTools:
         relative = str(path.relative_to(self.root))
         content = path.read_text(encoding="utf-8")
         count = content.count(old_text)
-        if count == 0:
-            raise ValueError("old_text was not found")
         replace_all = bool(arguments.get("replace_all"))
+        whitespace_recovered = False
+        if count == 0:
+            recovered = _replace_unique_horizontal_whitespace_variant(
+                content, old_text, new_text
+            )
+            if recovered is None:
+                raise _exact_edit_miss(relative)
+            updated, first_offset = recovered
+            count = 1
+            whitespace_recovered = True
+        else:
+            first_offset = content.find(old_text)
+            updated = content.replace(old_text, new_text, -1 if replace_all else 1)
         if count > 1 and not replace_all:
             raise ValueError(
                 f"old_text occurs {count} times; provide more context or set replace_all"
             )
-        first_offset = content.find(old_text)
         preferred_line = content[:first_offset].count("\n") + 1
-        updated = content.replace(old_text, new_text, -1 if replace_all else 1)
         self._validate_protected_rewrite(relative, content, updated)
         self._atomic_write(path, updated)
         replacements = count if replace_all else 1
@@ -942,7 +1027,9 @@ class ProjectTools:
         return ToolResult(
             "replace_in_file",
             f"Updated {relative} ({replacements} replacement"
-            f"{'s' if replacements != 1 else ''}).\n\n{evidence}",
+            f"{'s' if replacements != 1 else ''}"
+            f"{' after recovering indentation drift' if whitespace_recovered else ''})."
+            f"\n\n{evidence}",
             changed_files=(relative,),
             observations=observations,
         )
@@ -1368,6 +1455,7 @@ class ProjectTools:
         original = path.read_text(encoding="utf-8")
         content = original
         replacements = 0
+        whitespace_recoveries = 0
         first_offset: int | None = None
         for edit in edits:
             old_text = edit.get("old_text")
@@ -1378,7 +1466,18 @@ class ProjectTools:
                 raise ValueError("each edit must have text new_text")
             count = content.count(old_text)
             if count == 0:
-                raise ValueError(f"old_text not found: {old_text[:80]}")
+                recovered = _replace_unique_horizontal_whitespace_variant(
+                    content, old_text, new_text
+                )
+                if recovered is None:
+                    raise _exact_edit_miss(relative, old_text)
+                content, recovered_offset = recovered
+                count = 1
+                whitespace_recoveries += 1
+                if first_offset is None:
+                    first_offset = recovered_offset
+                replacements += 1
+                continue
             replace_all = bool(edit.get("replace_all"))
             if count > 1 and not replace_all:
                 raise ValueError(
@@ -1404,11 +1503,18 @@ class ProjectTools:
         observations, evidence = self._post_edit_evidence(
             path, relative, preferred_line=preferred_line
         )
+        recovery_note = (
+            f"; recovered {whitespace_recoveries} indentation "
+            f"{'variations' if whitespace_recoveries != 1 else 'variation'}"
+            if whitespace_recoveries
+            else ""
+        )
         return ToolResult(
             "edit_file",
             f"Applied {len(edits)} edit specification"
             f"{'s' if len(edits) != 1 else ''} ({replacements} replacement"
-            f"{'s' if replacements != 1 else ''}) to {relative}.\n\n{evidence}",
+            f"{'s' if replacements != 1 else ''}{recovery_note}) to {relative}."
+            f"\n\n{evidence}",
             changed_files=(relative,),
             observations=observations,
         )

@@ -6,6 +6,31 @@ how it was verified so a later session can continue without rediscovering anythi
 
 ## Passes
 
+### Pass 17 — Recover safe exact edits from indentation drift (2026-09)
+
+- **Observed failure:** in the live ResumAI chat, Gemma correctly read
+  `src/lib/llm/providers.ts` and identified the `llama3.1` default, but its `edit_file` payload
+  reproduced the block with four/six-space indentation instead of the source's two/four spaces.
+  The exact edit failed, a second exact replacement failed, and two identical recovery reads were
+  omitted before the progress guard stopped the turn. The guard prevented runaway work but could
+  not complete the already-understood one-token change.
+- **Correction:** `edit_file` and `replace_in_file` now recover a single uniquely identifiable
+  horizontal-whitespace variant. Every line break and non-whitespace token in `old_text` must
+  match, the old/new token layouts must align, token boundaries cannot be embedded in larger
+  tokens, and ambiguous matches still fail. The mutation substitutes only the new tokens while
+  preserving the source's actual spaces, tabs, and line endings. Unrecoverable misses explicitly
+  direct the model to the already-verified `replace_lines` coordinates instead of another reread.
+- **Regression coverage:** tool tests cover both exact-edit paths, formatting preservation,
+  ambiguous candidates, embedded-token rejection, and the `replace_lines` recovery hint. An
+  agent-level test replays the observed read and mismatched `edit_file` payload and now completes
+  in three provider steps with a clean checkpoint. The evaluation suite adds the ResumAI-shaped
+  `indentation_edit` scenario with a required final-content assertion.
+- **Live verification:** `gemma4:12b` naturally reproduced the same indentation-mismatched
+  `edit_file` call in the disposable scenario. LocalCode reported one indentation recovery,
+  changed only `src/lib/llm/providers.ts`, and completed successfully in one segment without a
+  repeated read or progress-guard stop. The full 135-test suite, `compileall`, desktop-file
+  validation, and `git diff --check` pass.
+
 ### Pass 16 — Reproducible real-model evaluation harness (2026-09)
 
 - **Motivation:** reliability fixes through Pass 15F came from valuable but ad-hoc live-model

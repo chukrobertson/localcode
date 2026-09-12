@@ -34,8 +34,8 @@ The model has access to these tools for reading, editing, and inspecting the pro
 | `read_files` | Batch-read up to 8 files in a single call |
 | `replace_lines` | Replace a verified, current line range without reproducing its exact text |
 | `write_file` | Create or replace a file atomically |
-| `edit_file` | Apply multiple find-and-replace edits, including replace-all edits, in one step |
-| `replace_in_file` | Single find-and-replace in a file |
+| `edit_file` | Apply multiple replacements, including replace-all and indentation recovery |
+| `replace_in_file` | Single replacement with safe recovery from unique indentation drift |
 | `delete_file` | Delete a project file |
 | `create_directory` | Create a directory and its parents |
 | `rename_file` | Rename or move a file within the project |

@@ -416,6 +416,109 @@ class AgentRunnerTests(unittest.TestCase):
             {"replace_lines"},
         )
 
+    def test_agent_recovers_the_observed_unique_indentation_edit_mismatch(self) -> None:
+        path = self.project_root / "src/lib/llm/providers.ts"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            "function getDefaultModel(provider: LLMProvider): string {\n"
+            "  const defaults: Record<LLMProvider, string> = {\n"
+            "    ollama: 'llama3.1',\n"
+            "    openai: 'gpt-4o-mini',\n"
+            "    anthropic: 'claude-3-haiku-20240307',\n"
+            "  }\n"
+            "  return defaults[provider]\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        calls = {"count": 0}
+
+        def observed_edit_sequence(model, settings, *, messages, context_window,
+                                   output_tokens, tools=None, on_chunk=None,
+                                   cancel=None, **_kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return ProviderChatResult(
+                    "",
+                    tool_calls=[
+                        ProviderToolCall(
+                            id="read-1",
+                            name="read_file",
+                            arguments={"path": "src/lib/llm/providers.ts"},
+                        )
+                    ],
+                    prompt_tokens=500,
+                    eval_tokens=8,
+                    done_reason="tool_calls",
+                    effective_context=context_window,
+                )
+            if calls["count"] == 2:
+                return ProviderChatResult(
+                    "",
+                    tool_calls=[
+                        ProviderToolCall(
+                            id="edit-1",
+                            name="edit_file",
+                            arguments={
+                                "path": "src/lib/llm/providers.ts",
+                                "edits": [
+                                    {
+                                        "old_text": (
+                                            "    const defaults: Record<LLMProvider, string> = {\n"
+                                            "      ollama: 'llama3.1',\n"
+                                            "      openai: 'gpt-4o-mini',\n"
+                                            "      anthropic: 'claude-3-haiku-20240307',\n"
+                                            "    }"
+                                        ),
+                                        "new_text": (
+                                            "    const defaults: Record<LLMProvider, string> = {\n"
+                                            "      ollama: 'gemma4:12b',\n"
+                                            "      openai: 'gpt-4o-mini',\n"
+                                            "      anthropic: 'claude-3-haiku-20240307',\n"
+                                            "    }"
+                                        ),
+                                    }
+                                ],
+                            },
+                        )
+                    ],
+                    prompt_tokens=600,
+                    eval_tokens=8,
+                    done_reason="tool_calls",
+                    effective_context=context_window,
+                )
+            content = "Updated src/lib/llm/providers.ts to use gemma4:12b."
+            if on_chunk:
+                on_chunk(content)
+            return ProviderChatResult(
+                content,
+                prompt_tokens=700,
+                eval_tokens=18,
+                done_reason="stop",
+                effective_context=context_window,
+            )
+
+        errors: list[str] = []
+        runner = AgentRunner(self.database, AppSettings(self.database))
+        with (
+            patch("localcode.agent.run_chat", observed_edit_sequence),
+            patch("localcode.agent.show_model_info", fake_show_model_info),
+        ):
+            runner.run_turn(
+                self.chat.id,
+                "Update the default Ollama model to gemma4:12b.",
+                AgentCallbacks(error=errors.append),
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(calls["count"], 3)
+        self.assertIn("    ollama: 'gemma4:12b',", path.read_text(encoding="utf-8"))
+        assistant = self.database.list_messages(self.chat.id)[-1]
+        self.assertEqual(assistant.metadata["done_reason"], "stop")
+        self.assertEqual(assistant.metadata["changed_files"], ["src/lib/llm/providers.ts"])
+        checkpoint = self.database.get_task_checkpoint(self.chat.id)
+        self.assertEqual(checkpoint.status, "complete")
+        self.assertEqual(checkpoint.failures, [])
+
     def test_multi_step_edit_can_copy_after_first_mutation(self) -> None:
         calls = {"count": 0, "palettes": []}
 

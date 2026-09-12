@@ -25,7 +25,7 @@ class EvalHarnessTests(unittest.TestCase):
         self.assertEqual(len(SCENARIOS), len(SCENARIO_BY_NAME))
         self.assertEqual(
             {scenario.name for scenario in SCENARIOS},
-            {"inspect_only", "read_only", "verified_edit"},
+            {"indentation_edit", "inspect_only", "read_only", "verified_edit"},
         )
         for scenario in SCENARIOS:
             self.assertIn(scenario.permission_mode, {"allow", "read-only"})
@@ -74,6 +74,9 @@ class EvalHarnessTests(unittest.TestCase):
             verification_exit_code=0,
             verification_output="OK",
             agents_file_exists=True,
+            content_requirements={
+                "calculator.py contains 'return left + right'": True,
+            },
         )
 
         checks = score_scenario(scenario, evidence)

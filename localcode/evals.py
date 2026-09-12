@@ -47,6 +47,7 @@ class EvalScenario:
     allowed_agent_commands: tuple[str, ...] = ()
     verification_argv: tuple[str, ...] = ()
     required_tool_groups: tuple[tuple[str, ...], ...] = ()
+    required_file_contents: tuple[tuple[str, str], ...] = ()
     expected_checkpoint_status: str = "complete"
     expect_agents_file: bool = True
     suite: str = "smoke"
@@ -88,6 +89,33 @@ SCENARIOS = (
         required_tool_groups=(
             tuple(sorted(MUTATION_TOOLS)),
             ("run_command",),
+        ),
+        required_file_contents=(("calculator.py", "return left + right"),),
+    ),
+    EvalScenario(
+        name="indentation_edit",
+        description="Recover a small exact edit when the model drifts on indentation width.",
+        prompt="Update the default Ollama model to gemma4:12b and make no other changes.",
+        permission_mode="allow",
+        files=(
+            (
+                "src/lib/llm/providers.ts",
+                "import type { LLMProvider } from '@/lib/domain/types'\n\n"
+                "function getDefaultModel(provider: LLMProvider): string {\n"
+                "  const defaults: Record<LLMProvider, string> = {\n"
+                "    ollama: 'llama3.1',\n"
+                "    openai: 'gpt-4o-mini',\n"
+                "    anthropic: 'claude-3-haiku-20240307',\n"
+                "  }\n"
+                "  return defaults[provider]\n"
+                "}\n",
+            ),
+        ),
+        required_changed_files=("src/lib/llm/providers.ts",),
+        allowed_changed_files=("src/lib/llm/providers.ts",),
+        required_tool_groups=(tuple(sorted(MUTATION_TOOLS)),),
+        required_file_contents=(
+            ("src/lib/llm/providers.ts", "ollama: 'gemma4:12b'"),
         ),
     ),
     EvalScenario(
@@ -151,6 +179,7 @@ class EvalEvidence:
     verification_exit_code: int | None = None
     verification_output: str = ""
     agents_file_exists: bool = False
+    content_requirements: dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -431,6 +460,15 @@ def score_scenario(scenario: EvalScenario, evidence: EvalEvidence) -> list[EvalC
             )
         )
 
+    for requirement, matched in evidence.content_requirements.items():
+        checks.append(
+            EvalCheck(
+                f"required file content: {requirement}",
+                matched,
+                "matched" if matched else "missing",
+            )
+        )
+
     checks.append(
         EvalCheck(
             "AGENTS.md policy",
@@ -505,6 +543,13 @@ def run_scenario(
         streamed_characters=recorder.streamed_characters,
         final_response=recorder.final_response,
         agents_file_exists=(project_root / "AGENTS.md").is_file(),
+        content_requirements={
+            f"{path} contains {text!r}": (
+                (project_root / path).is_file()
+                and text in (project_root / path).read_text(encoding="utf-8", errors="replace")
+            )
+            for path, text in scenario.required_file_contents
+        },
     )
     _checkpoint_evidence(checkpoint, evidence)
     if assistant is not None:
@@ -585,14 +630,19 @@ def _default_report_path(model: str) -> Path:
 
 
 def _print_summary(results: Sequence[EvalResult], write_line: Callable[[str], None]) -> None:
+    scenario_width = max(13, *(len(result.scenario) for result in results))
     write_line("")
-    write_line("Scenario       Result  Seconds  Status              Changes")
-    write_line("-------------  ------  -------  ------------------  ------------------------")
+    write_line(f"{'Scenario':<{scenario_width}}  Result  Seconds  Status              Changes")
+    write_line(
+        f"{'-' * scenario_width}  ------  -------  ------------------  "
+        "------------------------"
+    )
     for result in results:
         evidence = result.evidence
         changes = ", ".join(evidence.actual_changed_files) or "(none)"
         write_line(
-            f"{result.scenario:<13}  {'PASS' if result.passed else 'FAIL':<6}  "
+            f"{result.scenario:<{scenario_width}}  "
+            f"{'PASS' if result.passed else 'FAIL':<6}  "
             f"{result.duration_seconds:>7.1f}  {evidence.checkpoint_status:<18}  {changes}"
         )
         if not result.passed:

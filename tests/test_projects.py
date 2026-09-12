@@ -553,6 +553,89 @@ class ProjectToolsTests(unittest.TestCase):
         self.assertFalse(too_many.success)
         self.assertIn("at most 8", too_many.output)
 
+    def test_exact_edits_recover_unique_indentation_drift(self) -> None:
+        tools = ProjectTools(self.root, permission_mode="allow")
+        path = self.root / "providers.ts"
+        original = (
+            "function getDefaultModel(provider: string): string {\n"
+            "  const defaults = {\n"
+            "    ollama: 'llama3.1',\n"
+            "    openai: 'gpt-4o-mini',\n"
+            "  }\n"
+            "  return defaults[provider]\n"
+            "}\n"
+        )
+        path.write_text(original, encoding="utf-8")
+
+        edited = tools.execute(
+            "edit_file",
+            {
+                "path": "providers.ts",
+                "edits": [
+                    {
+                        "old_text": (
+                            "    const defaults = {\n"
+                            "      ollama: 'llama3.1',\n"
+                            "      openai: 'gpt-4o-mini',\n"
+                            "    }"
+                        ),
+                        "new_text": (
+                            "    const defaults = {\n"
+                            "      ollama: 'gemma4:12b',\n"
+                            "      openai: 'gpt-4o-mini',\n"
+                            "    }"
+                        ),
+                    }
+                ],
+            },
+        )
+
+        self.assertTrue(edited.success)
+        self.assertIn("recovered 1 indentation variation", edited.output)
+        self.assertIn("  const defaults = {\n    ollama: 'gemma4:12b',", path.read_text())
+
+        path.write_text(original, encoding="utf-8")
+        replaced = tools.execute(
+            "replace_in_file",
+            {
+                "path": "providers.ts",
+                "old_text": "      ollama: 'llama3.1',",
+                "new_text": "      ollama: 'gemma4:12b',",
+            },
+        )
+
+        self.assertTrue(replaced.success)
+        self.assertIn("recovering indentation drift", replaced.output)
+        self.assertIn("    ollama: 'gemma4:12b',", path.read_text())
+
+    def test_whitespace_recovery_rejects_ambiguous_matches(self) -> None:
+        path = self.root / "duplicates.py"
+        path.write_text("  value = 'old'\n    value = 'old'\n", encoding="utf-8")
+        result = ProjectTools(self.root, permission_mode="allow").execute(
+            "replace_in_file",
+            {
+                "path": "duplicates.py",
+                "old_text": "      value = 'old'",
+                "new_text": "      value = 'new'",
+            },
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("use replace_lines", result.output)
+        self.assertEqual(path.read_text(), "  value = 'old'\n    value = 'old'\n")
+
+        path.write_text("prefixvalue = 'old'suffix\n", encoding="utf-8")
+        embedded = ProjectTools(self.root, permission_mode="allow").execute(
+            "replace_in_file",
+            {
+                "path": "duplicates.py",
+                "old_text": "value  = 'old'",
+                "new_text": "value  = 'new'",
+            },
+        )
+        self.assertFalse(embedded.success)
+        self.assertEqual(path.read_text(), "prefixvalue = 'old'suffix\n")
+
     def test_edit_file_can_replace_every_exact_occurrence(self) -> None:
         tools = ProjectTools(self.root, permission_mode="allow")
         path = self.root / "buttons.py"
