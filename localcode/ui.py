@@ -12,10 +12,8 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .agent import AgentCallbacks, AgentRunner
-from .agents_file import AgentsFileManager
 from .context import make_report
 from .database import Database, utc_now
-from .memory import MemPalaceManager
 from .models import Chat, ContextReport, Project
 from .ollama import OllamaClient
 from .paths import APP_NAME, PACKAGE_ROOT, transcript_dir
@@ -42,12 +40,12 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.database = Database()
         self.settings = AppSettings(self.database)
-        self.memory = MemPalaceManager()
-        self.runner = AgentRunner(self.database, self.settings, self.memory)
+        self.runner = AgentRunner(self.database, self.settings)
 
         self.projects: list[Project] = []
         self.chats: list[Chat] = []
         self.models: list[ProviderModelInfo] = []
+        self.model_ids: list[str] = []
         self.current_project: Project | None = None
         self.current_chat: Chat | None = None
         self.worker: threading.Thread | None = None
@@ -59,8 +57,6 @@ class MainWindow(Adw.ApplicationWindow):
         self._banner_persistent = False
         self._force_close = False
         self._close_polling = False
-        self._background_jobs: set[threading.Thread] = set()
-
         self._install_actions()
         self._build_ui()
         self.connect("close-request", self._on_close_request)
@@ -124,7 +120,6 @@ class MainWindow(Adw.ApplicationWindow):
         project_menu.add_css_class("flat")
         menu = Gio.Menu()
         menu.append("Open Project Folder", "win.open-project-folder")
-        menu.append("Sync Memory Now", "win.sync-memory")
         menu.append("Forget Project", "win.forget-project")
         project_menu.set_menu_model(menu)
         project_picker.append(project_menu)
@@ -169,18 +164,6 @@ class MainWindow(Adw.ApplicationWindow):
         self.phase_label.add_css_class("caption")
         footer.append(self.phase_label)
 
-        memory_button = Gtk.Button()
-        memory_button.add_css_class("flat")
-        memory_button.connect("clicked", lambda _button: self._show_preferences())
-        memory_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-        self.memory_icon = Gtk.Image.new_from_icon_name("folder-saved-search-symbolic")
-        self.memory_icon.set_pixel_size(15)
-        memory_content.append(self.memory_icon)
-        self.memory_label = Gtk.Label(label="Checking local memory...", xalign=0, hexpand=True)
-        self.memory_label.add_css_class("caption")
-        memory_content.append(self.memory_label)
-        memory_button.set_child(memory_content)
-        footer.append(memory_button)
         panel.append(footer)
 
         toolbar.set_content(panel)
@@ -205,7 +188,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.model_dropdown = Gtk.DropDown.new(self.model_store, None)
         self.model_dropdown.set_enable_search(True)
         self.model_dropdown.set_size_request(180, -1)
-        self.model_dropdown.set_tooltip_text("Ollama model for this chat")
+        self.model_dropdown.set_tooltip_text("Completion model for this chat")
         self.model_dropdown.connect("notify::selected", self._on_model_selected)
         header.pack_end(self.model_dropdown)
 
@@ -257,8 +240,8 @@ class MainWindow(Adw.ApplicationWindow):
         welcome.append(title)
         body = Gtk.Label(
             label=(
-                "A private coding workspace for Ollama. Every transcript stays local, "
-                "context pressure stays visible, and project knowledge survives compaction."
+                "A private coding workspace for local and API models. Every transcript stays "
+                "local, context pressure stays visible, and project knowledge survives compaction."
             ),
             wrap=True,
             justify=Gtk.Justification.CENTER,
@@ -450,10 +433,6 @@ class MainWindow(Adw.ApplicationWindow):
                 self._idle(self._models_loaded, models, "")
             except Exception as error:
                 self._idle(self._models_loaded, [], str(error))
-            status = self.memory.status()
-            self._idle(
-                self._memory_status_loaded, status.available, status.initialized, status.detail
-            )
 
         threading.Thread(target=worker, name="service-discovery", daemon=True).start()
 
@@ -464,18 +443,6 @@ class MainWindow(Adw.ApplicationWindow):
         if error:
             self._toast(error, 6)
 
-    def _memory_status_loaded(self, available: bool, initialized: bool, detail: str) -> None:
-        if available and initialized:
-            self.memory_label.set_label("MemPalace ready")
-            self.memory_icon.set_from_icon_name("emblem-ok-symbolic")
-        elif available:
-            self.memory_label.set_label("MemPalace needs a project")
-            self.memory_icon.set_from_icon_name("dialog-information-symbolic")
-        else:
-            self.memory_label.set_label("Set up MemPalace")
-            self.memory_icon.set_from_icon_name("folder-saved-search-symbolic")
-        self.memory_label.set_tooltip_text(detail or None)
-
     def _set_model_dropdown(self) -> None:
         desired = ""
         if self.current_chat:
@@ -484,13 +451,20 @@ class MainWindow(Adw.ApplicationWindow):
             desired = self.current_project.model
         desired = desired or self.settings.default_model
         names = [model.display_name() for model in self.models]
-        if desired and desired not in names:
-            names.append(desired)
+        ids = [model.model_id or model.display_name() for model in self.models]
+        if desired and desired not in ids:
+            if desired in names:
+                desired = ids[names.index(desired)]
+            else:
+                names.append(desired)
+                ids.append(desired)
         if not names:
             names = ["No completion models"]
+            ids = [""]
+        self.model_ids = ids
         self._updating_models = True
         self.model_store.splice(0, self.model_store.get_n_items(), names)
-        selected = names.index(desired) if desired in names else 0
+        selected = ids.index(desired) if desired in ids else 0
         self.model_dropdown.set_selected(selected)
         self.model_dropdown.set_sensitive(bool(self.models))
         self._updating_models = False
@@ -527,6 +501,7 @@ class MainWindow(Adw.ApplicationWindow):
             notice=lambda level, title, body: self._idle(
                 self._show_notice_for_chat, chat_id, level, title, body
             ),
+            discard=lambda: self._idle(self._discard_stream, chat_id),
             complete=lambda value: self._idle(self._turn_complete, chat_id, value),
             error=lambda value: self._idle(self._turn_error, chat_id, value),
             approval=self._request_approval,
@@ -551,6 +526,12 @@ class MainWindow(Adw.ApplicationWindow):
             self.message_feed.append(self.streaming_bubble)
         self.streaming_bubble.append_chunk(chunk)
         self._scroll_to_bottom()
+
+    def _discard_stream(self, chat_id: str) -> None:
+        if not self._chat_is_visible(chat_id) or self.streaming_bubble is None:
+            return
+        self.message_feed.remove(self.streaming_bubble)
+        self.streaming_bubble = None
 
     def _show_activity(
         self,
@@ -589,7 +570,8 @@ class MainWindow(Adw.ApplicationWindow):
             self._show_notice(
                 "warning",
                 "Context is filling up",
-                "LocalCode will compact older turns before Ollama can silently truncate them.",
+                "LocalCode will compact older turns before the provider can silently "
+                "truncate them.",
             )
         elif report.state in {"critical", "exhausted"}:
             self._show_notice(
@@ -766,34 +748,17 @@ class MainWindow(Adw.ApplicationWindow):
         if not path:
             self._toast("Only local project folders are supported.")
             return
-        agents = AgentsFileManager(path)
-        agents_existed = agents.path.exists() or agents.path.is_symlink()
-        can_restore_agents = (
-            agents_existed and agents.path.is_file() and not agents.path.is_symlink()
-        )
-        original_agents = (
-            agents.path.read_text(encoding="utf-8", errors="replace")
-            if can_restore_agents
-            else ""
-        )
         try:
-            agents.ensure()
             project = self.database.add_project(
                 path,
                 model=self.settings.default_model,
                 context_window=self.settings.default_context_window,
             )
         except (OSError, ValueError, sqlite3.Error) as error:
-            if can_restore_agents:
-                agents._write(original_agents)
-            elif not agents_existed:
-                agents.path.unlink(missing_ok=True)
             self._toast(str(error), 6)
             return
         self._refresh_projects(select_id=project.id)
         self._toast(f"Added {project.name}")
-        if self.memory.executable():
-            self._initialize_memory_async(project)
 
     def _new_chat(self) -> None:
         if not self.current_project:
@@ -807,8 +772,7 @@ class MainWindow(Adw.ApplicationWindow):
             heading="Delete this chat?",
             body=(
                 "The local transcript for this chat will be removed from LocalCode. "
-                "Project files are not changed. MemPalace cleanup is attempted in "
-                "the background when available."
+                "Project files are not changed."
             ),
         )
         dialog.add_response("cancel", "Cancel")
@@ -828,8 +792,6 @@ class MainWindow(Adw.ApplicationWindow):
                 if self.current_chat and self.current_chat.id == chat.id:
                     self.current_chat = None
                 self._refresh_chats()
-                if self.current_project:
-                    self.memory.prune_in_background(self.current_project)
 
         dialog.choose(self, None, chosen)
 
@@ -841,9 +803,8 @@ class MainWindow(Adw.ApplicationWindow):
             heading=f"Forget {project.name}?",
             body=(
                 "LocalCode will remove its chats and settings for this project. The "
-                "project folder, "
-                "AGENTS.md, and MemPalace project-file archive remain on disk. Exported "
-                "LocalCode chat files are deleted."
+                "project folder and AGENTS.md remain on disk. Exported LocalCode chat "
+                "files are deleted."
             ),
         )
         dialog.add_response("cancel", "Cancel")
@@ -863,7 +824,6 @@ class MainWindow(Adw.ApplicationWindow):
                         transcript.unlink(missing_ok=True)
                 transcript_root.mkdir(parents=True, exist_ok=True)
                 transcript_root.chmod(0o700)
-                self.memory.prune_in_background(project)
                 self.database.remove_project(project.id)
                 self.current_project = None
                 self.current_chat = None
@@ -872,16 +832,20 @@ class MainWindow(Adw.ApplicationWindow):
         dialog.choose(self, None, chosen)
 
     def _show_add_provider_dialog(self, _button: Gtk.Button) -> None:
-        dialog = Adw.PreferencesDialog(title="Add API Provider", search_enabled=False)
-        page = Adw.PreferencesPage(title="Provider", icon_name="network-server-symbolic")
-        dialog.add(page)
+        dialog = Adw.Dialog(title="Add API Provider")
+        dialog.set_content_width(440)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        box.set_margin_top(18)
+        box.set_margin_bottom(18)
+        box.set_margin_start(24)
+        box.set_margin_end(24)
+
         group = Adw.PreferencesGroup(
             title="Connection",
             description="Any OpenAI-compatible endpoint works, including LM Studio, "
             "vLLM, llama.cpp server, and cloud APIs.",
         )
-        page.add(group)
-
         name_row = Adw.EntryRow(title="Display name")
         endpoint_row = Adw.EntryRow(title="Endpoint URL")
         endpoint_row.set_text("https://api.openai.com/v1")
@@ -895,25 +859,56 @@ class MainWindow(Adw.ApplicationWindow):
         group.add(endpoint_row)
         group.add(key_row)
         group.add(context_row)
+        box.append(group)
 
-        def provider_chosen(current: Adw.PreferencesDialog, result: Gio.AsyncResult) -> None:
-            dialog.close()
-            name = name_row.get_text().strip()
-            endpoint = endpoint_row.get_text().strip()
-            key = key_row.get_text().strip()
-            if not name or not endpoint:
-                self._toast("Provider name and endpoint are required.")
-                return
-            self.database.add_provider(
-                name,
-                endpoint=endpoint,
-                api_key=key,
-                context_window=int(context_row.get_value()),
-            )
-            self._refresh_models_async()
+        buttons = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=8, halign=Gtk.Align.END
+        )
+        cancel = Gtk.Button(label="Cancel")
+        cancel.add_css_class("flat")
+        cancel.connect("clicked", lambda _button: dialog.close())
+        buttons.append(cancel)
+        add = Gtk.Button(label="Add Provider")
+        add.add_css_class("suggested-action")
+        add.add_css_class("pill")
+        add.connect(
+            "clicked",
+            lambda _button: self._save_provider(
+                dialog, name_row, endpoint_row, key_row, context_row
+            ),
+        )
+        buttons.append(add)
+        box.append(buttons)
 
-        dialog.connect("closed", lambda _dialog: provider_chosen)
+        dialog.set_child(box)
         dialog.present(self)
+
+    def _save_provider(
+        self,
+        dialog: Adw.Dialog,
+        name_row: Adw.EntryRow,
+        endpoint_row: Adw.EntryRow,
+        key_row: Adw.EntryRow,
+        context_row: Adw.SpinRow,
+    ) -> None:
+        name = name_row.get_text().strip()
+        endpoint = endpoint_row.get_text().strip()
+        key = key_row.get_text().strip()
+        if not name or not endpoint:
+            self._toast("Provider name and endpoint are required.")
+            return
+        if "/" in name:
+            self._toast("Provider name cannot contain '/'.")
+            return
+        self.database.add_provider(
+            name,
+            endpoint=endpoint,
+            api_key=key,
+            context_window=int(context_row.get_value()),
+        )
+        dialog.close()
+        self._toast(f"Added provider {name}")
+        self._refresh_models_async()
 
     def _show_preferences(self) -> None:
         dialog = Adw.PreferencesDialog(title="LocalCode Preferences", search_enabled=False)
@@ -955,35 +950,58 @@ class MainWindow(Adw.ApplicationWindow):
         )
         ollama_group.add(compact_row)
 
-        style_store = Gtk.StringList.new(
-            ["Ponytail — minimal, YAGNI", "Balanced (default)", "Verbose — thorough, documented"]
+        steps_row = Adw.SpinRow.new_with_range(4, 30, 1)
+        steps_row.set_title("Maximum agent steps")
+        steps_row.set_subtitle(
+            "Tool rounds allowed per turn; completed work survives the limit"
         )
-        style_row = Adw.ComboRow(
-            title="Code style",
-            subtitle=(
-                "Ponytail: writes only what is necessary using a YAGNI decision ladder. "
-                "Balanced: normal coding behaviour. "
-                "Verbose: thorough with comments, docstrings, and explanations."
+        steps_row.set_value(self.settings.max_tool_rounds)
+        steps_row.connect(
+            "notify::value",
+            lambda row, _param: self.settings.set("max_tool_rounds", int(row.get_value())),
+        )
+        ollama_group.add(steps_row)
+
+        segments_row = Adw.SpinRow.new_with_range(1, 4, 1)
+        segments_row.set_title("Continuation segments")
+        segments_row.set_subtitle(
+            "Fresh context segments allowed inside one request; 1 disables auto-continue"
+        )
+        segments_row.set_value(self.settings.max_continuation_segments)
+        segments_row.connect(
+            "notify::value",
+            lambda row, _param: self.settings.set(
+                "max_continuation_segments", int(row.get_value())
             ),
-            model=style_store,
         )
-        style_map = {
-            "Ponytail — minimal, YAGNI": "ponytail",
-            "Balanced (default)": "balanced",
-            "Verbose — thorough, documented": "verbose",
+        ollama_group.add(segments_row)
+
+        scope_store = Gtk.StringList.new(
+            ["Focused — minimal, YAGNI", "Standard (default)"]
+        )
+        scope_row = Adw.ComboRow(
+            title="Change scope",
+            subtitle=(
+                "Focused makes the smallest coherent change. Standard uses the model's "
+                "normal implementation judgment."
+            ),
+            model=scope_store,
+        )
+        scope_map = {
+            "Focused — minimal, YAGNI": "focused",
+            "Standard (default)": "standard",
         }
-        current_style = self.settings.code_style
-        style_row.set_selected(list(style_map.values()).index(current_style))
-        style_row.connect(
+        scope_row.set_selected(0 if self.settings.change_scope == "focused" else 1)
+        scope_row.connect(
             "notify::selected",
             lambda row, _param: self.settings.set(
-                "code_style",
-                style_map.get(
-                    style_store.get_item(row.get_selected()).get_string(), "balanced"
+                "change_scope",
+                scope_map.get(
+                    scope_store.get_item(row.get_selected()).get_string(), "standard"
                 ),
             ),
         )
-        ollama_group.add(style_row)
+        ollama_group.add(scope_row)
 
         providers_group = Adw.PreferencesGroup(
             title="API Providers",
@@ -1048,132 +1066,8 @@ class MainWindow(Adw.ApplicationWindow):
             project_context.connect("notify::value", project_context_changed)
             project_group.add(project_context)
 
-            memory_switch = Adw.SwitchRow(
-                title="Use project memory",
-                subtitle="Retrieve and archive this project through MemPalace",
-                active=self.current_project.memory_enabled,
-            )
-
-            def memory_toggled(row: Adw.SwitchRow, _param) -> None:
-                if self.current_project:
-                    self.current_project = self.database.update_project(
-                        self.current_project.id, memory_enabled=row.get_active()
-                    )
-
-            memory_switch.connect("notify::active", memory_toggled)
-            project_group.add(memory_switch)
-
-        memory_page = Adw.PreferencesPage(title="Memory", icon_name="folder-saved-search-symbolic")
-        dialog.add(memory_page)
-        memory_group = Adw.PreferencesGroup(
-            title="MemPalace",
-            description="Verbatim local retrieval for project files and full chat transcripts.",
-        )
-        memory_page.add(memory_group)
-        available = bool(self.memory.executable())
-        status_row = Adw.ActionRow(
-            title="Memory service",
-            subtitle=("Installed locally" if available else "Not installed"),
-        )
-        status_row.set_icon_name(
-            "emblem-ok-symbolic" if available else "folder-download-symbolic"
-        )
-        setup = Gtk.Button(label="Sync" if available else "Install")
-        setup.set_valign(Gtk.Align.CENTER)
-        setup.add_css_class("suggested-action" if not available else "flat")
-        status_row.add_suffix(setup)
-        memory_group.add(status_row)
-
-        def setup_clicked(_button: Gtk.Button) -> None:
-            setup.set_sensitive(False)
-            status_row.set_subtitle("Preparing local memory...")
-            selected_project = self.current_project
-
-            def progress(value: str) -> None:
-                self._idle(status_row.set_subtitle, value)
-
-            def worker() -> None:
-                try:
-                    if not self.memory.executable():
-                        self.memory.install(progress)
-                    if selected_project:
-                        progress("Initializing and indexing the selected project...")
-                        success, detail = self.memory.sync_project(selected_project)
-                        if not success:
-                            raise RuntimeError(detail or "MemPalace initialization failed.")
-                    final_status = self.memory.status()
-                    final_text = (
-                        "MemPalace is installed and indexed."
-                        if final_status.initialized
-                        else "MemPalace is installed. Add a project to begin indexing."
-                    )
-                    self._idle(status_row.set_subtitle, final_text)
-                    self._idle(setup.set_label, "Sync")
-                    self._idle(self._memory_status_loaded, True, True, "Ready")
-                except Exception as error:
-                    self._idle(status_row.set_subtitle, str(error)[-1000:])
-                    self._idle(dialog.add_toast, Adw.Toast.new("MemPalace setup failed"))
-                finally:
-                    self._idle(setup.set_sensitive, True)
-
-            self._start_background_job("mempalace-setup", worker)
-
-        setup.connect("clicked", setup_clicked)
-
-        source_row = Adw.ActionRow(
-            title="Bundled source",
-            subtitle="vendor/mempalace · isolated Python environment · no cloud API",
-            icon_name="system-software-install-symbolic",
-        )
-        memory_group.add(source_row)
         dialog.connect("closed", lambda _dialog: self._refresh_models_async())
         dialog.present(self)
-
-    def _initialize_memory_async(self, project: Project) -> None:
-        chat_id = self.current_chat.id if self.current_chat else ""
-        self._show_activity(
-            chat_id,
-            "memory",
-            "Indexing project memory",
-            "MemPalace is scanning project files in the background.",
-            "running",
-        )
-
-        def worker() -> None:
-            success, detail = self.memory.initialize_project(project)
-            if chat_id:
-                self._idle(
-                    self._show_activity,
-                    chat_id,
-                    "memory",
-                    "Indexing project memory",
-                    detail,
-                    "complete" if success else "error",
-                )
-
-        self._start_background_job("mempalace-init", worker)
-
-    def _sync_memory(self) -> None:
-        if not self.current_project:
-            return
-        if not self.memory.executable():
-            self._show_preferences()
-            return
-        project = self.current_project
-        chat_id = self.current_chat.id if self.current_chat else ""
-        self._show_activity(chat_id, "memory", "Syncing memory", project.path, "running")
-
-        def completed(success: bool, detail: str) -> None:
-            self._idle(
-                self._show_activity,
-                chat_id,
-                "memory",
-                "Syncing memory",
-                detail,
-                "complete" if success else "error",
-            )
-
-        self.memory.sync_in_background(project, completed)
 
     def _show_about(self) -> None:
         about = Adw.AboutDialog(
@@ -1181,11 +1075,10 @@ class MainWindow(Adw.ApplicationWindow):
             application_icon="io.localcode.LocalCode",
             developer_name="chukrobertson with OpenCode",
             version="0.1.0",
-            comments="Local-first Ollama coding for GNOME",
+            comments="Local-first LLM coding workspace for GNOME",
             website="https://github.com/chukrobertson/localcode",
             license_type=Gtk.License.MIT_X11,
         )
-        about.add_credit_section("Local memory", ["MemPalace contributors"])
         about.add_credit_section("Desktop toolkit", ["GTK 4", "Libadwaita"])
         about.present(self)
 
@@ -1248,11 +1141,10 @@ class MainWindow(Adw.ApplicationWindow):
         if self._updating_models or not self.current_chat:
             return
         index = dropdown.get_selected()
-        if not (0 <= index < self.model_store.get_n_items()):
+        if not (0 <= index < len(self.model_ids)):
             return
-        item = self.model_store.get_item(index)
-        model = item.get_string() if item else ""
-        if model and model != "No completion models":
+        model = self.model_ids[index]
+        if model:
             self.current_chat = self.database.update_chat(self.current_chat.id, model=model)
 
     def _on_permission_selected(self, dropdown: Gtk.DropDown, _param) -> None:
@@ -1282,7 +1174,7 @@ class MainWindow(Adw.ApplicationWindow):
         Gio.AppInfo.launch_default_for_uri(Path(self.current_project.path).as_uri(), None)
 
     def _update_action_sensitivity(self) -> None:
-        for name in ("open-project-folder", "sync-memory", "forget-project"):
+        for name in ("open-project-folder", "forget-project"):
             action = self.lookup_action(name)
             if action:
                 action.set_enabled(self.current_project is not None)
@@ -1299,7 +1191,7 @@ class MainWindow(Adw.ApplicationWindow):
             action = self.lookup_action(name)
             if action:
                 action.set_enabled(not busy)
-        for name in ("sync-memory", "forget-project"):
+        for name in ("forget-project",):
             action = self.lookup_action(name)
             if action:
                 action.set_enabled(not busy and self.current_project is not None)
@@ -1317,11 +1209,7 @@ class MainWindow(Adw.ApplicationWindow):
         return True
 
     def _has_active_work(self) -> bool:
-        return bool(
-            (self.worker and self.worker.is_alive())
-            or self._background_jobs
-            or self.memory.has_active_work()
-        )
+        return bool(self.worker and self.worker.is_alive())
 
     def _poll_close(self) -> bool:
         if self._has_active_work():
@@ -1330,28 +1218,12 @@ class MainWindow(Adw.ApplicationWindow):
         self.close()
         return GLib.SOURCE_REMOVE
 
-    def _start_background_job(self, name: str, target) -> threading.Thread:
-        def worker() -> None:
-            try:
-                target()
-            finally:
-                self._idle(self._background_job_finished, threading.current_thread())
-
-        thread = threading.Thread(target=worker, name=name, daemon=True)
-        self._background_jobs.add(thread)
-        thread.start()
-        return thread
-
-    def _background_job_finished(self, thread: threading.Thread) -> None:
-        self._background_jobs.discard(thread)
-
     def _install_actions(self) -> None:
         callbacks = {
             "preferences": self._show_preferences,
             "add-project": self._choose_project,
             "about": self._show_about,
             "open-project-folder": self._open_project_folder,
-            "sync-memory": self._sync_memory,
             "forget-project": self._forget_project,
         }
         for name, callback in callbacks.items():

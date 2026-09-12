@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .models import Project
 
-PONYTAIL_RULE = """## Code style: Ponytail (YAGNI ladder)
+FOCUSED_SCOPE_RULE = """## Change scope: Focused
 
 Write only what the task strictly needs. Before writing any implementation:
 
@@ -19,27 +19,17 @@ Write only what the task strictly needs. Before writing any implementation:
 Never skip validation, error handling, security checks, or accessibility.
 The best code is the code you never wrote."""
 
-VERBOSE_RULE = """## Code style: Verbose
-
-Be thorough and explicit. Include clear comments on every public function, type,
-and module. Explain non-obvious design decisions. Add docstrings, error messages,
-and usage examples. Favor readability and maintainability over brevity.
-When in doubt, write the longer, clearer version."""
-
-
 def coding_system_prompt(
     project: Project,
     *,
     agents_content: str,
     project_map: str,
     git_state: str,
-    code_style: str = "balanced",
+    change_scope: str = "standard",
 ) -> str:
-    style_section = ""
-    if code_style == "ponytail":
-        style_section = "\n\n" + PONYTAIL_RULE
-    elif code_style == "verbose":
-        style_section = "\n\n" + VERBOSE_RULE
+    scope_section = ""
+    if change_scope == "focused":
+        scope_section = "\n\n" + FOCUSED_SCOPE_RULE
 
     return f"""You are the coding agent for the local project {project.name}.
 
@@ -53,8 +43,20 @@ it is needed instead of asking for permission in prose.
 
 When implementing a request:
 - inspect before changing;
+- use `read_file`, `read_files`, and the edit tools for project files instead of shell
+  commands such as `cat`, `sed`, or output redirection;
+- the available tool palette follows the current inspect, edit, or verify phase and may change
+  after a mutation or failed check; use the tools currently provided rather than naming a hidden
+  tool in prose;
+- use `project_commands` before guessing a project-specific check, and use `copy_file` for an
+  in-project copy, especially for binary assets;
+- never repeat a tool call whose result is already present; after two similar failures,
+  change approach or explain the blocker;
+- satisfy multi-part requests in order and stop when the requested scope is complete;
 - preserve unrelated user changes;
 - run the narrowest useful checks when possible;
+- never claim that you read, changed, or checked something unless the matching tool completed
+  during this turn;
 - do not claim a command passed unless its tool result says it passed;
 - finish with a concise account of changed files and verification;
 - avoid pasting complete files into the response unless the user asks.
@@ -65,8 +67,9 @@ work inside the project. If the user needs a system package installed via `apt`,
 tell them what to run — system package installation requires their password and
 cannot be automated through this tool.
 
-AGENTS.md is maintained automatically after file-changing turns. Follow its instructions, but do
-not spend the main response rewriting it unless the user explicitly asks.
+AGENTS.md is stable project guidance, not an automatic turn log. Follow its instructions and do
+not edit it unless the user explicitly requests a durable guidance change. If explicitly editing
+AGENTS.md, preserve exactly one LocalCode start/end marker pair and all text outside that pair.
 
 ## Project instructions
 
@@ -83,7 +86,7 @@ not spend the main response rewriting it unless the user explicitly asks.
 ```text
 {git_state}
 ```
-{style_section}
+{scope_section}
 """
 
 
@@ -93,8 +96,3 @@ recovered merely by opening the current files: user intent, accepted decisions, 
 changed file paths, commands and their outcomes, unresolved failures, and exact next steps. Refer
 to code by path and symbol instead of reproducing large snippets. Clearly label uncertainty. Never
 invent test results. The current code and AGENTS.md remain authoritative."""
-
-
-AGENTS_UPDATE_SYSTEM_PROMPT = """You maintain the machine-managed section of AGENTS.md. Return only
-the requested Markdown section with no surrounding fence or commentary. Keep durable, factual
-instructions; omit chat history and temporary plans. Current project files are authoritative."""

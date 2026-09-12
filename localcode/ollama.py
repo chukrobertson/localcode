@@ -128,6 +128,45 @@ class OllamaClient:
                 return int(item.get("context_length") or fallback)
         return fallback
 
+    @staticmethod
+    def _normalize_messages(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Translate LocalCode's canonical tool messages to Ollama chat format."""
+
+        normalized: list[dict[str, Any]] = []
+        for message in messages:
+            if message.get("role") == "tool":
+                tool_message: dict[str, Any] = {
+                    "role": "tool",
+                    "content": str(message.get("content") or ""),
+                }
+                name = str(message.get("tool_name") or message.get("name") or "")
+                if name:
+                    tool_message["tool_name"] = name
+                normalized.append(tool_message)
+                continue
+
+            copied = dict(message)
+            if copied.get("role") == "assistant" and copied.get("tool_calls"):
+                tool_calls: list[dict[str, Any]] = []
+                for raw_call in copied["tool_calls"]:
+                    call = dict(raw_call)
+                    call.pop("type", None)
+                    function = dict(call.get("function") or {})
+                    arguments = function.get("arguments", {})
+                    if isinstance(arguments, str):
+                        try:
+                            parsed = json.loads(arguments)
+                        except json.JSONDecodeError:
+                            parsed = {}
+                        function["arguments"] = parsed if isinstance(parsed, dict) else {}
+                    call["function"] = function
+                    tool_calls.append(call)
+                copied["tool_calls"] = tool_calls
+            normalized.append(copied)
+        return normalized
+
     def chat(
         self,
         *,
@@ -141,7 +180,7 @@ class OllamaClient:
     ) -> ChatResult:
         body: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": self._normalize_messages(messages),
             "stream": True,
             "think": False,
             "options": {
@@ -249,7 +288,10 @@ class OllamaClient:
                     final = {"done_reason": "connection_closed"}
                     interrupted = True
         except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace")
+            try:
+                detail = error.read().decode("utf-8", errors="replace")
+            finally:
+                error.close()
             try:
                 detail = str(json.loads(detail).get("error") or detail)
             except json.JSONDecodeError:
@@ -347,7 +389,10 @@ class OllamaClient:
             with urllib.request.urlopen(request, timeout=min(self.timeout, 30)) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace")
+            try:
+                detail = error.read().decode("utf-8", errors="replace")
+            finally:
+                error.close()
             raise OllamaError(f"Ollama HTTP {error.code}: {detail}") from error
         except urllib.error.URLError as error:
             raise OllamaError(f"Cannot reach Ollama at {self.endpoint}: {error.reason}") from error

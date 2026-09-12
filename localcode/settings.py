@@ -10,9 +10,9 @@ DEFAULTS = {
     "default_context_window": "32768",
     "compact_threshold": "0.78",
     "output_reserve": "4096",
-    "max_tool_rounds": "12",
-    "mempalace_enabled": "true",
-    "code_style": "balanced",
+    "max_tool_rounds": "16",
+    "max_continuation_segments": "2",
+    "change_scope": "standard",
 }
 
 
@@ -48,16 +48,19 @@ class AppSettings:
 
     @property
     def max_tool_rounds(self) -> int:
-        return min(30, max(1, self._int("max_tool_rounds", 12)))
+        return min(30, max(1, self._int("max_tool_rounds", 16)))
 
     @property
-    def mempalace_enabled(self) -> bool:
-        return self.get("mempalace_enabled").casefold() in {"1", "true", "yes", "on"}
+    def max_continuation_segments(self) -> int:
+        return min(4, max(1, self._int("max_continuation_segments", 2)))
 
     @property
-    def code_style(self) -> str:
-        value = self.get("code_style")
-        return value if value in {"ponytail", "balanced", "verbose"} else "balanced"
+    def change_scope(self) -> str:
+        value = self.database.get_setting("change_scope", "")
+        if value in {"focused", "standard"}:
+            return value
+        legacy = self.database.get_setting("code_style", "balanced")
+        return "focused" if legacy == "ponytail" else "standard"
 
     def _int(self, key: str, fallback: int) -> int:
         try:

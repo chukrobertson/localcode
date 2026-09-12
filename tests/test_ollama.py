@@ -159,6 +159,41 @@ class OllamaClientTests(unittest.TestCase):
         self.assertTrue(exhausted.exhausted_context(16))
         self.assertFalse(capped.exhausted_context(16))
 
+    def test_normalizes_canonical_tool_messages_for_ollama(self) -> None:
+        messages = OllamaClient._normalize_messages(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_7",
+                            "type": "function",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path":"main.py"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_7",
+                    "tool_name": "read_file",
+                    "content": "verified",
+                },
+            ]
+        )
+        self.assertNotIn("type", messages[0]["tool_calls"][0])
+        self.assertEqual(
+            messages[0]["tool_calls"][0]["function"]["arguments"],
+            {"path": "main.py"},
+        )
+        self.assertEqual(
+            messages[1],
+            {"role": "tool", "tool_name": "read_file", "content": "verified"},
+        )
+
     def test_cancel_interrupts_a_blocked_stream_read(self) -> None:
         cancel = threading.Event()
         results: list[ChatResult] = []

@@ -1,4 +1,4 @@
-.PHONY: run test check install mempalace
+.PHONY: run test check install
 
 run:
 	python3 localcode.py
@@ -12,6 +12,3 @@ check:
 
 install:
 	./scripts/install.sh
-
-mempalace:
-	./scripts/bootstrap-mempalace.sh

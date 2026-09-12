@@ -58,7 +58,7 @@ class ContextMeter(Gtk.Box):
             )
         else:
             self.value.set_label("Fresh")
-        exactness = "Estimated before generation" if report.estimated else "Reported by Ollama"
+        exactness = "Estimated" if report.estimated else "Reported by the model provider"
         detail = f"{exactness}. {report.reason}" if report.reason else exactness
         self.set_tooltip_text(detail)
 

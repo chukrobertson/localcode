@@ -8,6 +8,7 @@ from localcode.context import (
     estimate_request_tokens,
     estimate_text_tokens,
     select_compaction_boundary,
+    select_compaction_boundary_for_budget,
     should_compact,
 )
 from localcode.models import Message
@@ -58,6 +59,31 @@ class ContextTests(unittest.TestCase):
             Message(3, "chat", "user", "current"),
         ]
         self.assertEqual(select_compaction_boundary(messages, keep_recent=1), 2)
+
+    def test_budget_boundary_reclaims_old_complete_turns(self) -> None:
+        messages = [
+            Message(index + 1, "chat", role, "x" * 600)
+            for index, role in enumerate(["user", "assistant"] * 4)
+        ]
+        boundary = select_compaction_boundary_for_budget(
+            messages, keep_tokens=500, keep_recent=2
+        )
+        self.assertEqual(boundary, 6)
+
+    def test_budget_boundary_does_not_compact_when_tail_fits(self) -> None:
+        messages = [
+            Message(1, "chat", "user", "small"),
+            Message(2, "chat", "assistant", "answer"),
+        ]
+        self.assertEqual(
+            select_compaction_boundary_for_budget(messages, keep_tokens=1000), 0
+        )
+        self.assertEqual(
+            select_compaction_boundary_for_budget(
+                messages, keep_tokens=0, keep_recent=0, force=True
+            ),
+            2,
+        )
 
 
 if __name__ == "__main__":

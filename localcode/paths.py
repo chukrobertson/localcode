@@ -6,7 +6,6 @@ from pathlib import Path
 APP_ID = "io.localcode.LocalCode"
 APP_NAME = "LocalCode"
 PACKAGE_ROOT = Path(__file__).resolve().parent
-SOURCE_ROOT = PACKAGE_ROOT.parent
 
 
 def _xdg_path(env_name: str, fallback: Path) -> Path:
@@ -41,18 +40,6 @@ def database_path() -> Path:
 
 def transcript_dir(project_id: str) -> Path:
     return data_dir() / "transcripts" / project_id
-
-
-def palace_path() -> Path:
-    return data_dir() / "mempalace" / "palace"
-
-
-def bundled_mempalace_root() -> Path | None:
-    candidates = (
-        SOURCE_ROOT / "vendor" / "mempalace",
-        data_dir() / "app" / "vendor" / "mempalace",
-    )
-    return next((path for path in candidates if (path / "pyproject.toml").is_file()), None)
 
 
 def ensure_app_dirs() -> None:

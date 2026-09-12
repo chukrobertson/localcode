@@ -90,6 +90,36 @@ def select_compaction_boundary(
     return assistants[-1].id if assistants else 0
 
 
+def select_compaction_boundary_for_budget(
+    messages: list[Message],
+    keep_tokens: int,
+    *,
+    keep_recent: int = 2,
+    force: bool = False,
+) -> int:
+    """Choose a complete-turn boundary while retaining a token-bounded recent tail."""
+    if not messages:
+        return 0
+    minimum_start = max(0, len(messages) - max(0, keep_recent))
+    retained_tokens = 0
+    retained_from = len(messages)
+    for index in range(len(messages) - 1, -1, -1):
+        message_tokens = estimate_text_tokens(messages[index].content) + 12
+        if index < minimum_start and retained_tokens + message_tokens > max(0, keep_tokens):
+            break
+        retained_tokens += message_tokens
+        retained_from = index
+    eligible = messages[:retained_from]
+    assistants = [message for message in eligible if message.role == "assistant"]
+    if assistants:
+        return assistants[-1].id
+    if force:
+        force_eligible = messages[:-1] if messages[-1].role != "assistant" else messages
+        assistants = [message for message in force_eligible if message.role == "assistant"]
+        return assistants[-1].id if assistants else 0
+    return 0
+
+
 def format_token_count(value: int) -> str:
     if value >= 1_000_000:
         return f"{value / 1_000_000:.1f}m"

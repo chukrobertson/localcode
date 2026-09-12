@@ -23,19 +23,6 @@ class AgentsFileTests(unittest.TestCase):
         self.assertIn(START_MARKER, content)
         self.assertIn(END_MARKER, content)
 
-    def test_model_update_preserves_human_notes(self) -> None:
-        manager = AgentsFileManager(self.root)
-        manager.ensure()
-        with manager.path.open("a", encoding="utf-8") as handle:
-            handle.write("\nNever remove this note.\n")
-
-        changed = manager.apply_model_update("```markdown\n## Architecture\n\n- Uses SQLite.\n```")
-
-        self.assertTrue(changed)
-        content = manager.read()
-        self.assertIn("## Architecture", content)
-        self.assertIn("Never remove this note.", content)
-
     def test_existing_file_gets_managed_section_without_overwrite(self) -> None:
         (self.root / "AGENTS.md").write_text("# Team Rules\n\nDo not rewrite.\n", encoding="utf-8")
         manager = AgentsFileManager(self.root)

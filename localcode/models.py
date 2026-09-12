@@ -12,7 +12,6 @@ class Project:
     model: str = ""
     context_window: int = 32768
     permission_mode: str = "ask"
-    memory_enabled: bool = True
     created_at: str = ""
     updated_at: str = ""
     last_opened_at: str = ""
@@ -52,6 +51,52 @@ class Activity:
     detail: str = ""
     status: str = "complete"
     created_at: str = ""
+
+
+@dataclass(slots=True)
+class WorkingFile:
+    id: int
+    chat_id: str
+    path: str
+    start_line: int
+    end_line: int
+    content: str
+    source_hash: str
+    updated_at: str = ""
+
+
+@dataclass(slots=True)
+class TaskCheckpoint:
+    chat_id: str
+    objective: str = ""
+    status: str = "active"
+    completed_work: str = ""
+    changed_files: list[str] = field(default_factory=list)
+    commands: list[str] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
+    next_step: str = ""
+    segment_count: int = 0
+    updated_at: str = ""
+
+
+@dataclass(slots=True)
+class ProjectMemory:
+    id: int
+    project_id: str
+    source_chat_id: str
+    title: str
+    content: str
+    updated_at: str = ""
+
+
+@dataclass(slots=True)
+class SourceSymbols:
+    id: int
+    project_id: str
+    path: str
+    source_hash: str
+    symbols: str
+    updated_at: str = ""
 
 
 @dataclass(slots=True)

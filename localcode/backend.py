@@ -18,8 +18,20 @@ def resolve_backend(
 ) -> tuple[object, str, int]:
     providers = settings.database.list_providers()
     for provider in providers:
-        if model.startswith(f"{provider.name}/") or model == provider.name:
+        if model.startswith(f"{provider.name}/"):
             actual_model = model.removeprefix(f"{provider.name}/")
+            client = OpenAIClient(provider.endpoint, provider.api_key)
+            context = provider.default_context_window
+            return client, actual_model, context
+        if model == provider.name:
+            actual_model = model
+            client = OpenAIClient(provider.endpoint, provider.api_key)
+            context = provider.default_context_window
+            return client, actual_model, context
+        # Legacy chats stored the display form "<model> (<provider>)".
+        suffix = f" ({provider.name})"
+        if model.endswith(suffix):
+            actual_model = model[: -len(suffix)]
             client = OpenAIClient(provider.endpoint, provider.api_key)
             context = provider.default_context_window
             return client, actual_model, context

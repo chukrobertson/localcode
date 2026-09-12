@@ -15,4 +15,4 @@ if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$DATA_HOME/applications"
 fi
 
-printf '%s\n' "Uninstalled LocalCode. Chats and MemPalace data remain in $DATA_HOME/localcode."
+printf '%s\n' "Uninstalled LocalCode. Chats remain in $DATA_HOME/localcode."
